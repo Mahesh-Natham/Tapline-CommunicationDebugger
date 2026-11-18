@@ -125,6 +125,29 @@ class StreamFramer:
         self._process(out, ch, buf, final=False)
         return out
 
+    def flush_idle(self, now: float, idle_s: float = 0.1) -> list[Frame]:
+        """Close frames that can only end on silence (gap rule, start-only delimiter)."""
+        r = self.rule
+        if isinstance(r, GapRule):
+            idle_s = r.gap_ms / 1000
+        elif not (isinstance(r, DelimiterRule) and not r.end):
+            return []
+        out: list[Frame] = []
+        for ch, buf in self._bufs.items():
+            if buf.data and now - self._last_t.get(ch, now) > idle_s:
+                flags = ()
+                if isinstance(r, DelimiterRule) and not buf.data.startswith(r.start):
+                    flags = ("partial",)
+                self._emit(out, ch, buf, len(buf.data), flags)
+        return out
+
+    def flush_channel(self, channel: str) -> list[Frame]:
+        out: list[Frame] = []
+        buf = self._bufs.get(channel)
+        if buf and buf.data:
+            self._emit(out, channel, buf, len(buf.data))
+        return out
+
     def flush(self) -> list[Frame]:
         out: list[Frame] = []
         for ch, buf in self._bufs.items():
