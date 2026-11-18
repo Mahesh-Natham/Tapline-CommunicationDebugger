@@ -28,8 +28,37 @@ STATIC = Path(__file__).parent / "static"
 MAX_PAGE = 2000
 
 
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
+
+
 class NotFound(Exception):
     pass
+
+
+def _hostname(value: str) -> str:
+    """'localhost:8765' -> 'localhost', '[::1]:8765' -> '[::1]'."""
+    v = (value or "").strip().lower()
+    if v.startswith("["):
+        return v[: v.find("]") + 1] if "]" in v else v
+    return v.rsplit(":", 1)[0] if v.count(":") == 1 else v
+
+
+def is_local_request(headers) -> str | None:
+    """None if the request comes from Tapline's own page on this computer, else the reason.
+
+    Blocks other websites (Origin check) and DNS-rebinding tricks (Host check), so no
+    web page can switch Tapline into Send mode or transmit.
+    """
+    if _hostname(headers.get("host", "")) not in LOCAL_HOSTS:
+        return "Tapline only accepts requests addressed to localhost"
+    origin = headers.get("origin")
+    if origin and origin != "null":
+        host = origin.split("://", 1)[-1]
+        if not origin.startswith("http://") or _hostname(host) not in LOCAL_HOSTS:
+            return "Requests from other websites are blocked"
+    elif origin == "null":
+        return "Requests from other websites are blocked"
+    return None
 
 
 def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
@@ -43,6 +72,17 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
     app = FastAPI(title="Tapline", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.state.engine = engine
     app.state.base = base
+
+    @app.middleware("http")
+    async def local_only(request: Request, call_next):
+        reason = is_local_request(request.headers)
+        if reason:
+            return JSONResponse({"error": reason}, status_code=403)
+        if request.method in ("POST", "PUT", "DELETE") and request.url.path.startswith("/api/"):
+            ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
+            if ctype != "application/json":
+                return JSONResponse({"error": "Send JSON (Content-Type: application/json)"}, status_code=415)
+        return await call_next(request)
 
     # -- errors -> friendly JSON ---------------------------------------------------
     @app.exception_handler(SendNotAllowed)
@@ -383,6 +423,9 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
     # -- live events -------------------------------------------------------------------
     @app.websocket("/ws")
     async def ws(sock: WebSocket):
+        if is_local_request(sock.headers):
+            await sock.close(code=1008)
+            return
         await sock.accept()
         q = engine.subscribe()
         try:

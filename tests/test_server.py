@@ -9,10 +9,10 @@ from tapline.server import create_app
 @pytest.fixture
 def client(tmp_path):
     app = create_app(project="Bench", base=tmp_path)
-    with TestClient(app) as c:
+    with TestClient(app, base_url="http://127.0.0.1:8765") as c:
         c.put("/api/framing", json={"rule": {"kind": "length", "header": "5A A5", "len_offset": 2}})
         yield c
-        c.post("/api/stop")
+        c.post("/api/stop", json={})
 
 
 def wait_frames(c, n, timeout=5):
@@ -41,7 +41,7 @@ def test_start_simulator_and_get_frames(client):
 def test_frames_endpoint_paginates(client):
     start_sim(client, speed=200)
     wait_frames(client, 30)
-    client.post("/api/stop")
+    client.post("/api/stop", json={})
     r = client.get("/api/frames?limit=99999").json()
     assert len(r["items"]) <= 2000
     r = client.get("/api/frames?limit=5").json()
@@ -70,7 +70,7 @@ def test_send_forbidden_in_sniff_mode(client):
 
 def test_ws_streams_frames(client):
     start_sim(client, speed=40)
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("/ws", headers={"Host": "127.0.0.1:8765"}) as ws:
         first = ws.receive_json()
         assert first["type"] == "status"
         for _ in range(50):
@@ -85,7 +85,7 @@ def test_ws_streams_frames(client):
 def test_search_endpoint(client):
     start_sim(client, speed=100)
     wait_frames(client, 10)
-    client.post("/api/stop")
+    client.post("/api/stop", json={})
     r = client.get("/api/search", params={"q": "20.5"}).json()
     assert any(h["encoding"] == "x10:i16le" for h in r["hits"])
     assert client.get("/api/search", params={"q": ""}).json()["hits"] == []
@@ -103,11 +103,11 @@ def test_markers_and_nearby(client):
 def test_protocol_field_decode_series_compose_verdict(client):
     start_sim(client, speed=100)
     wait_frames(client, 12)
-    client.post("/api/stop")
+    client.post("/api/stop", json={})
     r = client.post("/api/protocol/field", json={"type": "temperature", "match": "5A A5 ?? 10",
                                                "field": {"name": "temp", "offset": 4, "type": "i16le", "scale": 0.1, "unit": "°C"}})
     assert r.status_code == 200
-    found = client.post("/api/checksums/find").json()["matches"]
+    found = client.post("/api/checksums/find", json={}).json()["matches"]
     assert found and found[0]["spec"]["algo"] == "sum8"
     client.post("/api/protocol/checksum", json={"spec": found[0]["spec"]})
     frames = client.get("/api/frames?limit=2000").json()["items"]
@@ -132,8 +132,8 @@ def test_series_endpoint(client):
 def test_guess_framing_and_diff(client):
     start_sim(client, speed=100)
     wait_frames(client, 20)
-    client.post("/api/stop")
-    g = client.post("/api/framing/guess").json()["candidates"]
+    client.post("/api/stop", json={})
+    g = client.post("/api/framing/guess", json={}).json()["candidates"]
     assert g[0]["rule"]["kind"] == "length"
     r = client.post("/api/diff", json={"a": 0, "b": 1}).json()
     assert len(r["diff"]) > 0
@@ -142,7 +142,7 @@ def test_guess_framing_and_diff(client):
 def test_export_csv(client):
     start_sim(client, speed=100)
     wait_frames(client, 5)
-    client.post("/api/stop")
+    client.post("/api/stop", json={})
     r = client.get("/api/export/frames.csv")
     assert r.status_code == 200 and r.text.splitlines()[0].startswith("id,time,channel")
     assert client.get("/api/export/protocol.json").status_code == 200
@@ -151,7 +151,7 @@ def test_export_csv(client):
 def test_sessions_and_projects(client):
     start_sim(client, speed=100)
     wait_frames(client, 5)
-    client.post("/api/stop")
+    client.post("/api/stop", json={})
     names = client.get("/api/sessions").json()["sessions"]
     assert names
     assert client.post("/api/sessions/load", json={"name": names[0]}).status_code == 200
