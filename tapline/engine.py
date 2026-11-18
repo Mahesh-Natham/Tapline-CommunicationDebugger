@@ -9,6 +9,7 @@ from pathlib import Path
 from . import protocol as proto_mod
 from .framing import GapRule, ModbusRule, NativeRule, Rule, StreamFramer, rule_from_json, rule_to_json
 from .model import CTRL_TO_DISP, DISP_TO_CTRL, SENT, Chunk, Frame, Marker, SerialConfig, is_sent
+from .pico import PicoBridge, PicoError
 from .rs485 import RoleTracker
 from .sources.modbus_sim import ModbusSimSource
 from .sources import can_source
@@ -47,6 +48,7 @@ class Engine:
         except ValueError:
             self.rule = GapRule(5)
         self.mode = "sniff"
+        self.pico: PicoBridge | None = None
         self.link = "ttl"
         self._roles = RoleTracker()
         self.sources: list[Source] = []
@@ -88,6 +90,7 @@ class Engine:
             "project": self.project.name if self.project else None, "session": self.session_name,
             "repeating": bool(self._repeat and not self._repeat.done()),
             "link": self.link,
+            "pico": self.pico.port if self.pico else None,
         }
 
     @property
@@ -434,6 +437,67 @@ class Engine:
         self.source_label = f"Saved session {name}"
         self.set_rule(self.rule)
         self._emit({"type": "status", "status": self.status()})
+
+    # -- Raspberry Pi Pico bridge (I²C / SPI sending) ---------------------------------------
+    async def pico_connect(self, port: str) -> str:
+        await self.pico_disconnect()
+        bridge = PicoBridge(port)
+        try:
+            await asyncio.to_thread(bridge.open)
+        except PicoError as e:
+            raise EngineError(str(e)) from e
+        self.pico = bridge
+        self._emit({"type": "status", "status": self.status()})
+        return bridge.version
+
+    async def pico_disconnect(self) -> None:
+        if getattr(self, "pico", None):
+            await asyncio.to_thread(self.pico.close)
+        self.pico = None
+
+    async def pico_send(self, bus: str, addr: int | None, hex_str: str, read_len: int = 0) -> dict:
+        if self.mode != "send":
+            raise SendNotAllowed("Switch to Send mode first — Sniff mode never transmits.")
+        if not getattr(self, "pico", None):
+            raise EngineError("Connect the Pico bridge first")
+        data = parse_hex(hex_str) if (hex_str or "").strip() else b""
+        read_len = int(read_len or 0)
+        try:
+            if bus == "i2c":
+                if addr is None or not 0x03 <= int(addr) <= 0x77:
+                    raise EngineError("I²C address must be 03–77 (hex)")
+                if not data and not read_len:
+                    raise ValueError("Give bytes to write, a number of bytes to read, or both")
+                if data:
+                    self._ingest_frame(f"{SENT} I²C 0x{addr:02X} write", data)
+                if read_len:
+                    got = await asyncio.to_thread(self.pico.i2c_read, addr, read_len, data)
+                elif data:
+                    got = b""
+                    await asyncio.to_thread(self.pico.i2c_write, addr, data)
+                if read_len:
+                    self._ingest_frame(f"I²C 0x{addr:02X} read", got)
+            elif bus == "spi":
+                if not data:
+                    raise ValueError("Give the bytes to clock out on MOSI")
+                self._ingest_frame(f"{SENT} SPI MOSI", data)
+                got = await asyncio.to_thread(self.pico.spi_xfer, data)
+                self._ingest_frame("SPI MISO", got)
+            else:
+                raise EngineError("Bus must be i2c or spi")
+        except PicoError as e:
+            raise EngineError(str(e)) from e
+        return {"read": got.hex(" ").upper() if got else ""}
+
+    def _ingest_frame(self, channel: str, data: bytes) -> None:
+        """Record a complete message (used for Pico traffic, which is not part of the live source)."""
+        c = Chunk(time.time(), channel, data)
+        self.chunks.append(c)
+        if self._writer:
+            self._writer.write_chunk(c)
+        f = Frame(max((x.id for x in self.frames[-1:]), default=-1) + 1, c.t, c.t, channel, data)
+        self._framer._next_id = max(self._framer._next_id, f.id + 1)
+        self._add_frame(f)
 
     async def open_project(self, project: Project) -> None:
         await self.stop()

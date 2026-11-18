@@ -21,6 +21,7 @@ from .sources.base import SourceError
 from .checksums import ChecksumSpec, check, find_checksums
 from .diff import diff_frames, variability
 from .engine import Engine, EngineError, SendNotAllowed, parse_hex
+from .pico import PicoError
 from .framing import ModbusRule, guess_framing, rule_from_json, rule_to_json
 from .model import SLAVE, SerialConfig, is_sent
 from .project import Project
@@ -386,6 +387,47 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
                     "status": status()}
         data = await engine.send(d.get("hex", ""), d.get("repeat_ms"), int(d.get("count", 1) or 1))
         return {"sent": data.hex(" ").upper(), "status": status()}
+
+    # -- Raspberry Pi Pico bridge ---------------------------------------------------------
+    @app.post("/api/pico/connect")
+    async def pico_connect(req: Request):
+        d = await body(req)
+        if not d.get("port"):
+            raise EngineError("Choose the Pico's serial port")
+        version = await engine.pico_connect(d["port"])
+        return {"version": version, "status": status()}
+
+    @app.post("/api/pico/disconnect")
+    async def pico_disconnect():
+        await engine.pico_disconnect()
+        return status()
+
+    @app.post("/api/pico/scan")
+    async def pico_scan():
+        if not engine.pico:
+            raise EngineError("Connect the Pico bridge first")
+        try:
+            found = await asyncio.to_thread(engine.pico.i2c_scan)
+        except PicoError as e:
+            raise EngineError(str(e))
+        return {"addresses": [f"{a:02X}" for a in found]}
+
+    @app.post("/api/pico/send")
+    async def pico_send(req: Request):
+        d = await body(req)
+        addr = d.get("addr")
+        if isinstance(addr, str):
+            try:
+                addr = int(addr.lower().removeprefix("0x"), 16) if addr.strip() else None
+            except ValueError:
+                raise ValueError("I²C address must be hex, e.g. 3C")
+        try:
+            n = int(d.get("read_len") or 0)
+        except (TypeError, ValueError):
+            raise ValueError("Bytes to read must be a number")
+        if not 0 <= n <= 256:
+            raise ValueError("Read 0–256 bytes")
+        return await engine.pico_send(str(d.get("bus", "")), addr, d.get("hex", ""), n)
 
     # -- CAN ----------------------------------------------------------------------------
     @app.get("/api/can")
