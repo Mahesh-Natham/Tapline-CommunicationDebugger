@@ -134,9 +134,10 @@ def test_pico_over_api(fake_pico, tmp_path):
         assert c.post("/api/pico/send", json={"bus": "i2c", "addr": "3C", "hex": "00"}).status_code in (400, 403)
         r = c.post("/api/pico/connect", json={"port": port})
         assert r.status_code == 200 and r.json()["status"]["pico"] == port
-        assert c.post("/api/pico/scan", json={}).json()["addresses"] == ["3C", "48"]
+        assert c.post("/api/pico/scan", json={}).status_code == 403  # scanning transmits
         assert c.post("/api/pico/send", json={"bus": "i2c", "addr": "3C", "hex": "00"}).status_code == 403
         c.post("/api/mode", json={"mode": "send"})
+        assert c.post("/api/pico/scan", json={}).json()["addresses"] == ["3C", "48"]
         assert c.post("/api/pico/send", json={"bus": "i2c", "addr": "zz", "hex": "00"}).status_code == 400
         r = c.post("/api/pico/send", json={"bus": "i2c", "addr": "0x48", "hex": "00", "read_len": 2})
         assert r.json()["read"] == "19 80"

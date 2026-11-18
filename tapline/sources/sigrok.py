@@ -34,8 +34,14 @@ async def _run(args: list[str], timeout: float = 60) -> str:
     try:
         out, err = await asyncio.wait_for(proc.communicate(), timeout)
     except asyncio.TimeoutError:
-        proc.kill()
         raise SourceError("sigrok-cli took too long and was stopped")
+    finally:
+        if proc.returncode is None:  # cancelled or timed out: never leave it holding the analyzer
+            proc.kill()
+            try:
+                await asyncio.shield(proc.wait())
+            except asyncio.CancelledError:
+                pass
     if proc.returncode != 0:
         msg = (err or out).decode(errors="replace").strip().splitlines()
         raise SourceError("sigrok-cli: " + (msg[-1] if msg else f"exit code {proc.returncode}"))

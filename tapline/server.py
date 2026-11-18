@@ -404,6 +404,8 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
 
     @app.post("/api/pico/scan")
     async def pico_scan():
+        if engine.mode != "send":
+            raise SendNotAllowed("Scanning I²C sends address bytes on the bus — switch to Send mode first.")
         if not engine.pico:
             raise EngineError("Connect the Pico bridge first")
         try:

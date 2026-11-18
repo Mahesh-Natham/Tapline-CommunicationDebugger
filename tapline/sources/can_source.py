@@ -64,6 +64,18 @@ def parse_can_text(s: str) -> tuple[int, bytes, bool]:
     return arb, payload, extended
 
 
+def listen_only_kwargs(interface: str) -> dict | None:
+    """python-can options that open the adapter silently (no ACKs, no error frames); None if unsupported."""
+    import can
+    return {"slcan": {"listen_only": True}, "pcan": {"state": can.BusState.PASSIVE},
+            "kvaser": {"driver_mode": False}, "virtual": {}}.get(interface)
+
+
+NO_LISTEN_ONLY = ("This CAN interface has no listen-only mode in Tapline, so the adapter will acknowledge "
+                  "messages like any device on the bus. Double-check the bitrate before connecting to a real "
+                  "vehicle or machine{extra}.")
+
+
 def _friendly(e: Exception, interface: str, channel: str) -> str:
     msg = str(e) or e.__class__.__name__
     if "not found" in msg.lower() or "no such" in msg.lower() or "could not" in msg.lower():
@@ -76,7 +88,11 @@ class CanSource(Source):
 
     def __init__(self, interface: str, channel: str, bitrate: int = 500000):
         self.interface, self.channel, self.bitrate = interface, channel, int(bitrate)
+        self.interface_for_mode = interface
         self.error = None
+        self.warning: str | None = None
+        self.passive = False
+        self._restarting = False
         self._bus = None
         self._stop = threading.Event()
         self._thread = None
@@ -90,14 +106,50 @@ class CanSource(Source):
             raise SourceError(f"Unknown CAN interface {self.interface!r}")
         self._loop = asyncio.get_running_loop()
         self._q = asyncio.Queue()
+        await self._open(passive=True)
+
+    async def _open(self, passive: bool) -> None:
+        import can
+        extra = listen_only_kwargs(self.interface_for_mode) if passive else {}
+        self.warning = None
+        if passive and extra is None:
+            hint = " (on Linux SocketCAN: sudo ip link set can0 type can bitrate N listen-only on)" \
+                if self.interface == "socketcan" else ""
+            self.warning = NO_LISTEN_ONLY.format(extra=hint)
+            extra = {}
+            passive = False
         try:
-            self._bus = await asyncio.to_thread(can.Bus, interface=self.interface, channel=self.channel,
-                                                bitrate=self.bitrate)
+            try:
+                self._bus = await asyncio.to_thread(can.Bus, interface=self.interface, channel=self.channel,
+                                                    bitrate=self.bitrate, **extra)
+            except TypeError:
+                if not extra:
+                    raise
+                self._bus = await asyncio.to_thread(can.Bus, interface=self.interface, channel=self.channel,
+                                                    bitrate=self.bitrate)
+                self.warning, passive = NO_LISTEN_ONLY.format(extra=" (this python-can version lacks it)"), False
         except Exception as e:  # python-can raises many different types
             raise SourceError(_friendly(e, self.interface, self.channel)) from e
+        self.passive = passive
         self._stop.clear()
         self._thread = threading.Thread(target=self._reader, daemon=True, name="tapline-can")
         self._thread.start()
+
+    async def set_passive(self, passive: bool) -> None:
+        """Reopen the adapter listen-only (Sniff) or active (Send)."""
+        if not self._bus or passive == self.passive:
+            return
+        self._restarting = True
+        self._stop.set()
+        if self._thread:
+            await asyncio.to_thread(self._thread.join, 1.0)
+        try:
+            await asyncio.to_thread(self._bus.shutdown)
+        except Exception:
+            pass
+        self._bus = None
+        self._restarting = False
+        await self._open(passive)
 
     def _put(self, item):
         try:
@@ -116,7 +168,8 @@ class CanSource(Source):
             if not self._stop.is_set():
                 self.error = _friendly(e, self.interface, self.channel)
         finally:
-            self._put(None)
+            if not self._restarting:
+                self._put(None)
 
     async def stop(self) -> None:
         self._stop.set()
@@ -141,6 +194,8 @@ class CanSource(Source):
         import can
         if not self._bus:
             raise SourceError("The CAN adapter is not open")
+        if self.passive:
+            await self.set_passive(False)  # Send mode: the adapter must be able to transmit
         try:
             await asyncio.to_thread(self._bus.send, can.Message(arbitration_id=arb_id, data=data,
                                                                 is_extended_id=extended), 1.0)

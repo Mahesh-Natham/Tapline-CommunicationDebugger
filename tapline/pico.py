@@ -45,6 +45,7 @@ class PicoBridge:
             raise PicoError("The Pico bridge is not connected")
         with self._lock:
             try:
+                self.ser.reset_input_buffer()  # drop late answers to earlier commands
                 self.ser.write((line + "\n").encode())
                 deadline = time.time() + self.timeout
                 buf = b""

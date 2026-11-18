@@ -166,6 +166,9 @@ class Engine:
             task.add_done_callback(lambda _t: self._emit({"type": "status", "status": self.status()}))
             self._tasks.append(task)
         self._tasks.append(asyncio.create_task(self._ticker(), name="ticker"))
+        for s in sources:
+            if getattr(s, "warning", None):
+                self._emit({"type": "error", "message": s.warning})
         self._emit({"type": "status", "status": self.status()})
 
     def _sigrok_sources(self, kind: str, opts: dict):
@@ -301,6 +304,9 @@ class Engine:
             raise EngineError("Mode must be sniff or send")
         if mode == "sniff":
             self.stop_repeat()
+            for s in self.sources:
+                if hasattr(s, "set_passive"):
+                    asyncio.get_running_loop().create_task(s.set_passive(True))
         self.mode = mode
         self._emit({"type": "status", "status": self.status()})
 

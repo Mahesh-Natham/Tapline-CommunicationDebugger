@@ -16,19 +16,26 @@ class RoleTracker:
         self.window = reply_window_s
         self.last_role: str | None = None
         self.last_t = -1e9
+        self.last_data = b""
+        self.no_reply = False  # broadcast (address 0): devices never answer
 
     def _expect_reply(self, t: float) -> bool:
-        return self.last_role == MASTER and t - self.last_t <= self.window
+        return self.last_role == MASTER and not self.no_reply and t - self.last_t <= self.window
 
     def label(self, f: Frame) -> str:
         if is_sent(f.channel):  # we sent it, acting as the master
-            self.last_role, self.last_t = MASTER, f.t_end
+            self.last_role, self.last_t, self.last_data = MASTER, f.t_end, f.data
+            self.no_reply = bool(f.data) and f.data[0] == 0
             return SENT
         expect = self._expect_reply(f.t_start)
         mb = modbus.decode(f.data, prefer="response" if expect else "request")
-        if mb:
+        if mb and expect and len(f.data) == 8 and f.data[1] in (5, 6):
+            # FC5/FC6 replies echo the request byte for byte: same bytes = reply, different = new request
+            role = SLAVE if f.data == self.last_data else MASTER
+        elif mb:
             role = MASTER if mb["kind"] == "request" else SLAVE
         else:
             role = SLAVE if expect else MASTER
-        self.last_role, self.last_t = role, f.t_end
+        self.no_reply = role == MASTER and bool(mb) and f.data[0] == 0
+        self.last_role, self.last_t, self.last_data = role, f.t_end, f.data
         return role

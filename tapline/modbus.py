@@ -62,7 +62,7 @@ def _as_request(d: bytes, out: dict) -> dict | None:
             out["registers"] = [_u16(payload, i) for i in range(0, len(payload) - 1, 2)]
             vals = ", ".join(map(str, out["registers"][:8]))
         else:
-            out["coils"] = [(payload[i // 8] >> (i % 8)) & 1 for i in range(out["quantity"])]
+            out["coils"] = [(payload[i // 8] >> (i % 8)) & 1 for i in range(min(out["quantity"], len(payload) * 8))]
             vals = "".join(map(str, out["coils"][:16]))
         out["summary"] = f"{NAMES[fn]}: {out['quantity']} from {out['start']} = [{vals}] (device {out['addr']})"
     else:
@@ -95,6 +95,13 @@ def _as_response(d: bytes, out: dict) -> dict | None:
 
 def decode(data: bytes, prefer: str | None = None) -> dict | None:
     """Plain-words view of a Modbus RTU frame, or None if it isn't one (bad CRC, unknown shape)."""
+    try:
+        return _decode(data, prefer)
+    except (IndexError, ValueError, KeyError):
+        return None  # CRC-valid but malformed: show it as plain bytes
+
+
+def _decode(data: bytes, prefer: str | None) -> dict | None:
     if len(data) < 5 or not crc_ok(data):
         return None
     addr, fn = data[0], data[1]
