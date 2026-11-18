@@ -1,0 +1,10 @@
+[project]
+name = "tapline"
+version = "0.1.0"
+description = "Sniff, decode and test serial links between boards and displays"
+requires-python = ">=3.10"
+dependencies = ["fastapi>=0.110", "uvicorn>=0.27", "pyserial>=3.5"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
