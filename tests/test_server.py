@@ -176,3 +176,17 @@ def test_options_and_ports(client):
 def test_index_served(client):
     r = client.get("/")
     assert r.status_code == 200 and "Tapline" in r.text
+
+
+def test_modbus_demo_summaries_build_and_wait(client):
+    r = client.post("/api/start", json={"source": "sim-modbus", "speed": 10})
+    assert r.status_code == 200 and r.json()["link"] == "rs485"
+    items = wait_frames(client, 4)["items"]
+    assert items[0]["modbus"]["summary"].startswith("Read holding registers")
+    assert items[1]["channel"] == "slave→master" and items[1]["modbus"]["registers"][0] == 235
+    b = client.post("/api/modbus/build", json={"addr": 1, "fn": 6, "start": 2, "qty": 230}).json()
+    assert b["hex"].replace(" ", "") == "01060002 00E6".replace(" ", "") + b["hex"].replace(" ", "")[-4:]
+    assert client.post("/api/modbus/build", json={"addr": 0, "fn": 3, "start": 0, "qty": 1}).status_code == 400
+    client.post("/api/mode", json={"mode": "send"})
+    r = client.post("/api/send", json={"hex": b["hex"], "wait_ms": 300}).json()
+    assert r["replies"] and r["replies"][0]["modbus"]["fn"] == 6

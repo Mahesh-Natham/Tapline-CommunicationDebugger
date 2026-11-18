@@ -6,8 +6,10 @@ import re
 import time
 
 from . import protocol as proto_mod
-from .framing import GapRule, Rule, StreamFramer, rule_from_json, rule_to_json
+from .framing import GapRule, ModbusRule, Rule, StreamFramer, rule_from_json, rule_to_json
 from .model import CTRL_TO_DISP, DISP_TO_CTRL, SENT, Chunk, Frame, Marker, SerialConfig
+from .rs485 import RoleTracker
+from .sources.modbus_sim import ModbusSimSource
 from .project import Project
 from .sources.base import Source, SourceError
 from .sources.serial_source import SerialSource
@@ -41,6 +43,8 @@ class Engine:
         except ValueError:
             self.rule = GapRule(5)
         self.mode = "sniff"
+        self.link = "ttl"
+        self._roles = RoleTracker()
         self.sources: list[Source] = []
         self.source_label = ""
         self.source_kind = ""
@@ -79,6 +83,7 @@ class Engine:
             "chunks": len(self.chunks), "markers": len(self.markers), "error": self.error,
             "project": self.project.name if self.project else None, "session": self.session_name,
             "repeating": bool(self._repeat and not self._repeat.done()),
+            "link": self.link,
         }
 
     @property
@@ -87,11 +92,18 @@ class Engine:
 
     # -- capture --------------------------------------------------------------
     async def start(self, kind: str, cfg: SerialConfig | None = None, cfg2: SerialConfig | None = None,
-                    speed: float = 1.0) -> None:
+                    speed: float = 1.0, link: str = "ttl", opts: dict | None = None) -> None:
         await self.stop()
+        if link not in ("ttl", "rs232", "rs485"):
+            raise EngineError("Link must be ttl, rs232 or rs485")
+        auto_rule: Rule | None = None
         if kind == "simulator":
             sources = [SimulatorSource(speed=speed)]
             label = "Simulator (demo)"
+        elif kind == "sim-modbus":
+            sources = [ModbusSimSource(speed=speed)]
+            label = "Modbus RS-485 simulator (demo)"
+            link, auto_rule = "rs485", ModbusRule()
         elif kind == "serial":
             if not cfg or not cfg.port:
                 raise EngineError("Choose a serial port first")
@@ -114,12 +126,18 @@ class Engine:
                 await s.stop()
             raise EngineError(str(e)) from e
         self.sources, self.source_label, self.source_kind = sources, label, kind
+        self.link = link
+        self._roles = RoleTracker()
+        if auto_rule is not None and auto_rule != self.rule:
+            self.rule = auto_rule
+            self.protocol.framing = rule_to_json(auto_rule)
+            self.save_protocol()
         self.chunks, self.frames, self.markers = [], [], []
         self.invalidate_types()
         self.error = None
         self._framer = StreamFramer(self.rule)
         if self.project:
-            meta = {"source": kind, "label": label, "rule": rule_to_json(self.rule)}
+            meta = {"source": kind, "label": label, "rule": rule_to_json(self.rule), "link": link}
             if cfg:
                 meta["config"] = cfg.to_json()
             self._writer = self.project.new_session(meta)
@@ -151,6 +169,8 @@ class Engine:
             self._add_frame(f)
 
     def _add_frame(self, f: Frame):
+        if self.link == "rs485":
+            f.channel = self._roles.label(f)
         self.frames.append(f)
         self._emit({"type": "frame", "frame": f.to_json()})
 
@@ -187,6 +207,10 @@ class Engine:
             frames += framer.feed(c)
         if not self.running:
             frames += framer.flush()
+        if self.link == "rs485":
+            self._roles = RoleTracker()
+            for f in frames:
+                f.channel = self._roles.label(f)
         self._framer = framer
         self.frames = frames
         self.invalidate_types()
@@ -232,8 +256,19 @@ class Engine:
         for f in self._framer.flush_channel(SENT):
             self._add_frame(f)
 
-    async def send(self, hex_str: str, repeat_ms: int | None = None, count: int = 1) -> bytes:
+    async def send(self, hex_str: str, repeat_ms: int | None = None, count: int = 1,
+                   wait_ms: int = 0, return_replies: bool = False):
         data = parse_hex(hex_str)
+        if wait_ms and not repeat_ms:
+            self._check_can_send()
+            self.stop_repeat()
+            before = len(self.frames)
+            await self._write(data)
+            deadline = time.time() + min(5000, int(wait_ms)) / 1000
+            while time.time() < deadline:
+                await asyncio.sleep(0.02)
+            replies = [f for f in self.frames[before:] if f.channel != SENT]
+            return replies if return_replies else data
         self._check_can_send()
         self.stop_repeat()
         if repeat_ms:
@@ -313,6 +348,7 @@ class Engine:
             raise EngineError("No project open")
         chunks, markers, meta = self.project.load_session(name)
         self.chunks, self.markers = chunks, markers
+        self.link = meta.get("link", "ttl")
         self.session_name = name
         self.source_label = f"Saved session {name}"
         self.set_rule(self.rule)

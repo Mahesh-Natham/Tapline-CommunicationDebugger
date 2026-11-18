@@ -12,12 +12,12 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import autodetect, protocol as P
+from . import autodetect, modbus, protocol as P
 from .checksums import ChecksumSpec, check, find_checksums
 from .diff import diff_frames, variability
 from .engine import Engine, EngineError, SendNotAllowed, parse_hex
-from .framing import guess_framing, rule_from_json, rule_to_json
-from .model import SerialConfig
+from .framing import ModbusRule, guess_framing, rule_from_json, rule_to_json
+from .model import SLAVE, SerialConfig
 from .project import Project
 from .search import find_value, near_marker
 from .sources.serial_source import list_ports, read_window
@@ -105,10 +105,18 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
     async def _ke(_: Request, e: Exception):
         return JSONResponse({"error": str(e).strip("'\"")}, status_code=404)
 
+    def modbus_of(f):
+        if engine.link != "rs485" and not isinstance(engine.rule, ModbusRule):
+            return None
+        return modbus.decode(f.data, prefer="response" if f.channel == SLAVE else "request")
+
     def frame_json(f):
         d = f.to_json()
         t = engine.type_of(f)
         d["type"] = t.name if t else None
+        mb = modbus_of(f)
+        if mb:
+            d["modbus"] = mb
         return d
 
     async def body(req: Request) -> dict:
@@ -142,7 +150,8 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
         src = d.get("source", "simulator")
         cfg = SerialConfig.from_json(d["config"]) if d.get("config") else None
         cfg2 = SerialConfig.from_json(d["config2"]) if d.get("config2") else None
-        await engine.start(src, cfg, cfg2, speed=float(d.get("speed", 1.0)))
+        await engine.start(src, cfg, cfg2, speed=float(d.get("speed", 1.0)), link=d.get("link", "ttl"),
+                           opts=d.get("opts") or {})
         return status()
 
     @app.post("/api/stop")
@@ -364,8 +373,26 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
     @app.post("/api/send")
     async def send(req: Request):
         d = await body(req)
+        wait = int(d.get("wait_ms") or 0)
+        if wait and not d.get("repeat_ms"):
+            data = parse_hex(d.get("hex", ""))
+            replies = await engine.send(d.get("hex", ""), wait_ms=wait, return_replies=True)
+            return {"sent": data.hex(" ").upper(), "replies": [frame_json(f) for f in replies], "status": status()}
         data = await engine.send(d.get("hex", ""), d.get("repeat_ms"), int(d.get("count", 1) or 1))
         return {"sent": data.hex(" ").upper(), "status": status()}
+
+    @app.post("/api/modbus/build")
+    async def modbus_build(req: Request):
+        d = await body(req)
+        try:
+            vals = d.get("values")
+            if isinstance(vals, str):
+                vals = [int(v, 0) for v in vals.replace(",", " ").split()]
+            data = modbus.build(int(d.get("addr", 1)), int(d.get("fn", 3)), int(d.get("start", 0)),
+                                int(d.get("qty", 1)), vals)
+        except (TypeError, ValueError) as e:
+            raise ValueError(str(e) if str(e) else "Check the Modbus fields")
+        return {"hex": data.hex(" ").upper(), "summary": modbus.decode(data, prefer="request")["summary"]}
 
     @app.post("/api/replay")
     async def replay(req: Request):
@@ -447,10 +474,11 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
                     await sock.send_json(e)
                 if batch:
                     items = []
-                    for e in batch:
-                        f = e["frame"]
-                        t = P.match_type(engine.protocol, bytes.fromhex(f["hex"].replace(" ", "")))  # new frames: not cached yet
-                        items.append({**f, "type": t.name if t else None})
+                    by_id = {e["frame"]["id"]: e["frame"] for e in batch}
+                    tail = engine.frames[-(len(batch) + 50):]
+                    for fr in tail:
+                        if fr.id in by_id:
+                            items.append(frame_json(fr))
                     await sock.send_json({"type": "frames", "items": items})
         except (WebSocketDisconnect, RuntimeError):
             pass

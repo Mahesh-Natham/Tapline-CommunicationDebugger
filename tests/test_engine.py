@@ -153,3 +153,28 @@ async def test_repeat_failure_is_reported(engine, monkeypatch):
     assert any(e["type"] == "error" and "disconnected" in e["message"] for e in events)
     await engine.stop()
 
+
+
+async def test_rs485_modbus_demo_labels_roles(engine):
+    from tapline.model import MASTER, SLAVE
+    await engine.start("sim-modbus", speed=10)
+    await wait_for(lambda: len(engine.frames) >= 4)
+    await engine.stop()
+    assert engine.link == "rs485"
+    assert engine.status()["rule"]["kind"] == "modbus"
+    assert [f.channel for f in engine.frames[:4]] == [MASTER, SLAVE, MASTER, SLAVE]
+
+
+async def test_send_and_wait_returns_reply(engine):
+    from tapline import modbus as M
+    await engine.start("sim-modbus", speed=0.2)
+    engine.set_mode("send")
+    replies = await engine.send(M.build(1, 6, 2, 260).hex(), wait_ms=400, return_replies=True)
+    assert any(M.decode(f.data, prefer="response") and M.decode(f.data, prefer="response")["fn"] == 6 for f in replies)
+    await engine.stop()
+
+
+async def test_serial_link_type_recorded(engine):
+    await engine.start("simulator", speed=20, link="rs232")
+    assert engine.status()["link"] == "rs232"
+    await engine.stop()

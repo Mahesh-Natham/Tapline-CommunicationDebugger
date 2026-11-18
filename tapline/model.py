@@ -6,6 +6,9 @@ from dataclasses import dataclass, field
 CTRL_TO_DISP = "ctrl→disp"
 DISP_TO_CTRL = "disp→ctrl"
 SENT = "sent"
+BUS = "bus"          # raw RS-485 line (both directions on one pair)
+MASTER = "master→slave"
+SLAVE = "slave→master"
 
 
 @dataclass

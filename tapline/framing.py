@@ -36,7 +36,17 @@ class FixedRule:
     length: int
 
 
-Rule = GapRule | DelimiterRule | LengthRule | FixedRule
+@dataclass(frozen=True)
+class ModbusRule:
+    """Modbus RTU: frames are cut where the CRC checks out (robust to USB adapters merging reads)."""
+
+
+@dataclass(frozen=True)
+class NativeRule:
+    """The source already delivers whole messages (I²C transactions, SPI transfers, CAN frames)."""
+
+
+Rule = GapRule | DelimiterRule | LengthRule | FixedRule | ModbusRule | NativeRule
 
 
 def rule_to_json(rule: Rule) -> dict:
@@ -49,6 +59,10 @@ def rule_to_json(rule: Rule) -> dict:
                 "len_size": rule.len_size, "len_adjust": rule.len_adjust}
     if isinstance(rule, FixedRule):
         return {"kind": "fixed", "length": rule.length}
+    if isinstance(rule, ModbusRule):
+        return {"kind": "modbus"}
+    if isinstance(rule, NativeRule):
+        return {"kind": "native"}
     raise TypeError(rule)
 
 
@@ -76,6 +90,10 @@ def rule_from_json(d: dict) -> Rule:
         if n < 1:
             raise ValueError("Fixed length must be at least 1")
         return FixedRule(n)
+    if kind == "modbus":
+        return ModbusRule()
+    if kind == "native":
+        return NativeRule()
     raise ValueError(f"Unknown framing kind: {kind!r}")
 
 
@@ -116,6 +134,11 @@ class StreamFramer:
             return out
         ch = chunk.channel
         buf = self._bufs.setdefault(ch, _Buf())
+        if isinstance(self.rule, NativeRule):
+            d = chunk.data[:MAX_FRAME]
+            out.append(Frame(self._next_id, chunk.t, chunk.t, ch, d, {"oversize"} if len(chunk.data) > MAX_FRAME else set()))
+            self._next_id += 1
+            return out
         if isinstance(self.rule, GapRule) and buf.data:
             if (chunk.t - self._last_t[ch]) * 1000 > self.rule.gap_ms:
                 self._emit(out, ch, buf, len(buf.data))
@@ -130,7 +153,7 @@ class StreamFramer:
         r = self.rule
         if isinstance(r, GapRule):
             idle_s = r.gap_ms / 1000
-        elif not (isinstance(r, DelimiterRule) and not r.end):
+        elif not ((isinstance(r, DelimiterRule) and not r.end) or isinstance(r, ModbusRule)):
             return []
         out: list[Frame] = []
         for ch, buf in self._bufs.items():
@@ -138,6 +161,8 @@ class StreamFramer:
                 flags = ()
                 if isinstance(r, DelimiterRule) and not buf.data.startswith(r.start):
                     flags = ("partial",)
+                if isinstance(r, ModbusRule):
+                    flags = ("partial",)  # silence before a full frame arrived
                 self._emit(out, ch, buf, len(buf.data), flags)
         return out
 
@@ -173,6 +198,45 @@ class StreamFramer:
             self._process_delim(out, ch, buf, r)
         elif isinstance(r, LengthRule):
             self._process_length(out, ch, buf, r)
+        elif isinstance(r, ModbusRule):
+            self._process_modbus(out, ch, buf)
+
+    def _process_modbus(self, out, ch, buf: _Buf):
+        from .modbus import crc_ok, frame_lengths
+        while len(buf.data) >= 4:
+            data = bytes(buf.data[:260])
+            cands = frame_lengths(data)
+            if cands is None or (data[0] > 247):
+                cands = None
+            if cands is not None:
+                hit = next((n for n in sorted(set(cands)) if len(data) >= n and crc_ok(data[:n])), None)
+                if hit:
+                    self._emit(out, ch, buf, hit)
+                    continue
+                if cands and all(len(buf.data) >= n for n in cands) and len(cands) >= (
+                        2 if data[1] in (1, 2, 3, 4, 15, 16) else 1):
+                    self._emit(out, ch, buf, 1, ("partial",))  # no candidate fits: resync
+                    continue
+                return
+            # junk or unknown function: if a recognisable frame starts later, drop the junk before it
+            for k in range(1, len(data) - 3):
+                c = frame_lengths(data[k:])
+                if c and data[k] <= 247 and any(len(data) - k >= n and crc_ok(data[k:k + n]) for n in c):
+                    self._emit(out, ch, buf, k, ("partial",))
+                    break
+            else:
+                k = 0
+            if k:
+                continue
+            # unknown function: accept the shortest CRC-valid prefix, else resync byte by byte
+            hit = next((n for n in range(4, len(data) + 1) if crc_ok(data[:n])), None)
+            if hit:
+                self._emit(out, ch, buf, hit)
+                continue
+            if len(buf.data) >= 256:
+                self._emit(out, ch, buf, 1, ("partial",))
+                continue
+            return
 
     def _process_delim(self, out, ch, buf: _Buf, r: DelimiterRule):
         while buf.data:

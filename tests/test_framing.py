@@ -95,3 +95,38 @@ def test_guess_framing_with_gaps_and_no_data():
     frames = [sim_frame(0x20, bytes([i])) for i in range(10)]
     ranked = guess_framing(gapped_chunks(frames))
     assert ranked[0][1] > 0.9
+
+
+from tapline.framing import ModbusRule, NativeRule
+
+
+def _crc(b):
+    from tapline.checksums import ALGORITHMS
+    return b + ALGORITHMS["crc16_modbus"](b).to_bytes(2, "little")
+
+
+def test_modbus_rule_splits_merged_request_and_reply():
+    req = bytes.fromhex("01030000000AC5CD")
+    resp = _crc(bytes([1, 3, 20]) + bytes(range(20)))
+    frames = frame_chunks([Chunk(0, CTRL_TO_DISP, req + resp + req)], ModbusRule())
+    assert [f.data for f in frames] == [req, resp, req]
+    assert all(not f.flags for f in frames)
+
+
+def test_modbus_rule_resyncs_after_junk_and_split_chunks():
+    req = bytes.fromhex("01030000000AC5CD")
+    data = b"\xff\x00\x13" + req + _crc(bytes([1, 6, 0, 2, 1, 44]))
+    sf = StreamFramer(ModbusRule())
+    out = []
+    for i in range(len(data)):
+        out += sf.feed(Chunk(i * 0.0001, CTRL_TO_DISP, data[i:i + 1]))
+    out += sf.flush()
+    good = [f.data for f in out if not f.flags]
+    assert good == [req, _crc(bytes([1, 6, 0, 2, 1, 44]))]
+
+
+def test_native_rule_one_chunk_one_frame():
+    frames = frame_chunks([Chunk(0, "I²C 0x3C write", b"\x00\xaf"), Chunk(0.0001, "I²C 0x3C write", b"\x01")], NativeRule())
+    assert [f.data for f in frames] == [b"\x00\xaf", b"\x01"]
+    assert rule_from_json(rule_to_json(ModbusRule())) == ModbusRule()
+    assert rule_from_json(rule_to_json(NativeRule())) == NativeRule()
