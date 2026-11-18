@@ -208,3 +208,17 @@ def test_sigrok_import_channels_and_decode(client, tmp_path):
     assert r.status_code == 200
     items = wait_frames(client, 4)["items"]
     assert {"SPI MOSI", "SPI MISO"} <= {i["channel"] for i in items}
+
+
+def test_can_demo_over_api(client):
+    assert client.get("/api/can").json()["interfaces"][0][0] == "slcan"
+    client.post("/api/start", json={"source": "sim-can", "speed": 10})
+    wait_frames(client, 3)
+    client.post("/api/protocol/field", json={"type": "rpm", "match": "", "channel": "CAN 0x100",
+                                           "field": {"name": "rpm", "offset": 0, "type": "u16be"}})
+    items = client.get("/api/frames?limit=50").json()["items"]
+    assert all((i["type"] == "rpm") == (i["channel"] == "CAN 0x100") for i in items)
+    client.post("/api/mode", json={"mode": "send"})
+    r = client.post("/api/send", json={"hex": "300#05", "wait_ms": 300}).json()
+    assert r["sent"] == "05" and any(x["channel"] == "CAN 0x301" for x in r["replies"])
+    assert client.post("/api/send", json={"hex": "300#0"}).status_code == 400

@@ -207,3 +207,16 @@ async def test_sigrok_missing_is_friendly(engine, monkeypatch):
     with pytest.raises(EngineError) as e:
         await engine.start("sim-la", opts={"protocol": "i2c"})
     assert "sigrok-cli is not installed" in str(e.value)
+
+
+async def test_can_demo_and_send(engine):
+    await engine.start("sim-can", speed=10)
+    await wait_for(lambda: len(engine.frames) >= 5)
+    assert engine.status()["rule"]["kind"] == "native"
+    engine.set_mode("send")
+    with pytest.raises(ValueError):
+        await engine.send("123#0102030405060708FF")
+    replies = await engine.send("300#01", wait_ms=300, return_replies=True)
+    assert any(f.channel == "CAN 0x301" for f in replies)
+    assert any(f.channel == "sent CAN 0x300" for f in engine.frames)
+    await engine.stop()

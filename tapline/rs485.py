@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from . import modbus
-from .model import MASTER, SENT, SLAVE, Frame
+from .model import MASTER, SENT, SLAVE, Frame, is_sent
 
 
 class RoleTracker:
@@ -21,7 +21,7 @@ class RoleTracker:
         return self.last_role == MASTER and t - self.last_t <= self.window
 
     def label(self, f: Frame) -> str:
-        if f.channel == SENT:  # we sent it, acting as the master
+        if is_sent(f.channel):  # we sent it, acting as the master
             self.last_role, self.last_t = MASTER, f.t_end
             return SENT
         expect = self._expect_reply(f.t_start)

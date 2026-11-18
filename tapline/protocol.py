@@ -39,6 +39,7 @@ class FrameType:
     match: str
     fields: list[Field] = field(default_factory=list)
     verdicts: list[dict] = field(default_factory=list)
+    channel: str = ""  # only messages on this channel (e.g. "CAN 0x100", "I²C 0x48 read")
     _pat: tuple | None = field(default=None, repr=False, compare=False)
 
     def pattern(self) -> list[int | None]:
@@ -57,7 +58,8 @@ class Protocol:
         return {
             "framing": self.framing,
             "checksum": self.checksum.to_json() if self.checksum else None,
-            "frame_types": [{"name": t.name, "match": t.match, "fields": [f.__dict__ for f in t.fields],
+            "frame_types": [{"name": t.name, "match": t.match, "channel": t.channel,
+                             "fields": [f.__dict__ for f in t.fields],
                              "verdicts": t.verdicts} for t in self.frame_types],
         }
 
@@ -66,7 +68,7 @@ class Protocol:
         types = []
         for t in d.get("frame_types", []):
             ft = FrameType(t["name"], t.get("match", ""), [Field(**f) for f in t.get("fields", [])],
-                           list(t.get("verdicts", [])))
+                           list(t.get("verdicts", [])), str(t.get("channel") or ""))
             ft.pattern()
             for f in ft.fields:
                 f.size()
@@ -98,8 +100,12 @@ def get_type(proto: Protocol, name: str) -> FrameType:
     raise KeyError(f"No frame type named {name!r}")
 
 
-def match_type(proto: Protocol, data: bytes) -> FrameType | None:
+def match_type(proto: Protocol, data: bytes, channel: str | None = None) -> FrameType | None:
     for t in proto.frame_types:
+        if t.channel and channel is not None and t.channel != channel.removeprefix("sent "):
+            continue
+        if t.channel and channel is None:
+            continue
         pat = t.pattern()
         if len(data) >= len(pat) and all(p is None or data[i] == p for i, p in enumerate(pat)):
             return t

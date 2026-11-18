@@ -16,13 +16,13 @@ import base64
 import binascii
 
 from . import autodetect, la_sim, modbus, protocol as P
-from .sources import sigrok
+from .sources import can_source, sigrok
 from .sources.base import SourceError
 from .checksums import ChecksumSpec, check, find_checksums
 from .diff import diff_frames, variability
 from .engine import Engine, EngineError, SendNotAllowed, parse_hex
 from .framing import ModbusRule, guess_framing, rule_from_json, rule_to_json
-from .model import SLAVE, SerialConfig
+from .model import SLAVE, SerialConfig, is_sent
 from .project import Project
 from .search import find_value, near_marker
 from .sources.serial_source import list_ports, read_window
@@ -214,7 +214,7 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
 
     @app.post("/api/framing/guess")
     async def guess():
-        chunks = [c for c in engine.chunks if c.channel != "sent"][-20000:]
+        chunks = [c for c in engine.chunks if not is_sent(c.channel)][-20000:]
         return {"candidates": [{"rule": rule_to_json(r), "score": s} for r, s in guess_framing(chunks)]}
 
     # -- markers + analysis --------------------------------------------------------
@@ -254,7 +254,7 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
         if prefix:
             pre = bytes.fromhex(prefix.replace(" ", ""))
             return [f for f in engine.frames if f.data.startswith(pre)]
-        return [f for f in engine.frames if f.channel != "sent"]
+        return [f for f in engine.frames if not is_sent(f.channel)]
 
     @app.get("/api/variability")
     async def var(type: str | None = None, prefix: str | None = None):
@@ -310,7 +310,7 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
         except KeyError:
             match = d.get("match") or ""
             P.FrameType(name, match).pattern()
-            t = P.FrameType(name, match)
+            t = P.FrameType(name, match, channel=str(d.get("channel") or "").removeprefix("sent "))
             engine.protocol.frame_types.append(t)
         t.fields = [x for x in t.fields if x.name != f.name] + [f]
         engine.save_protocol()
@@ -380,11 +380,18 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
         d = await body(req)
         wait = int(d.get("wait_ms") or 0)
         if wait and not d.get("repeat_ms"):
-            data = parse_hex(d.get("hex", ""))
             replies = await engine.send(d.get("hex", ""), wait_ms=wait, return_replies=True)
-            return {"sent": data.hex(" ").upper(), "replies": [frame_json(f) for f in replies], "status": status()}
+            sent = next((f for f in reversed(engine.frames) if is_sent(f.channel)), None)
+            return {"sent": sent.hex() if sent else "", "replies": [frame_json(f) for f in replies],
+                    "status": status()}
         data = await engine.send(d.get("hex", ""), d.get("repeat_ms"), int(d.get("count", 1) or 1))
         return {"sent": data.hex(" ").upper(), "status": status()}
+
+    # -- CAN ----------------------------------------------------------------------------
+    @app.get("/api/can")
+    async def can_info():
+        return {"available": can_source.available(), "interfaces": can_source.INTERFACES,
+                "bitrates": can_source.BITRATES}
 
     # -- logic analyzer -----------------------------------------------------------------
     @app.get("/api/sigrok")

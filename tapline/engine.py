@@ -8,9 +8,10 @@ from pathlib import Path
 
 from . import protocol as proto_mod
 from .framing import GapRule, ModbusRule, NativeRule, Rule, StreamFramer, rule_from_json, rule_to_json
-from .model import CTRL_TO_DISP, DISP_TO_CTRL, SENT, Chunk, Frame, Marker, SerialConfig
+from .model import CTRL_TO_DISP, DISP_TO_CTRL, SENT, Chunk, Frame, Marker, SerialConfig, is_sent
 from .rs485 import RoleTracker
 from .sources.modbus_sim import ModbusSimSource
+from .sources import can_source
 from .sources import sigrok
 from . import la_sim
 from .project import Project
@@ -107,6 +108,15 @@ class Engine:
             sources = [ModbusSimSource(speed=speed)]
             label = "Modbus RS-485 simulator (demo)"
             link, auto_rule = "rs485", ModbusRule()
+        elif kind == "sim-can":
+            sources, label, auto_rule = [can_source.SimCanSource(speed=speed)], "CAN simulator (demo car)", NativeRule()
+        elif kind == "can":
+            o = opts or {}
+            if not o.get("interface"):
+                raise EngineError("Choose a CAN interface")
+            sources = [can_source.CanSource(o["interface"], str(o.get("channel", "")), int(o.get("bitrate", 500000)))]
+            label = f"CAN {o['interface']} {o.get('channel', '')} · {int(o.get('bitrate', 500000)) // 1000} kbit/s"
+            auto_rule = NativeRule()
         elif kind in ("sigrok", "sim-la"):
             sources, label, auto_rule = self._sigrok_sources(kind, opts or {})
         elif kind == "serial":
@@ -295,31 +305,50 @@ class Engine:
         if not self.sources:
             raise EngineError("Start a source first")
 
-    async def _write(self, data: bytes):
+    @property
+    def is_can(self) -> bool:
+        return bool(self.sources) and hasattr(self.sources[0], "write_can")
+
+    async def _write(self, data, can_id: tuple[int, bool] | None = None):
+        """data: bytes for serial sources; for CAN, payload bytes plus can_id=(id, extended)."""
         self._check_can_send()
+        src = self.sources[0]
+        channel = SENT
         try:
-            await self.sources[0].write(data)
+            if self.is_can:
+                if can_id is None:
+                    raise EngineError("CAN messages need an ID — write them as ID#DATA, e.g. 300#01")
+                await src.write_can(can_id[0], data, can_id[1])
+                channel = f"{SENT} {can_source.can_channel(*can_id)}"
+            else:
+                await src.write(data)
         except SourceError as e:
             raise EngineError(str(e)) from e
         except NotImplementedError as e:
             raise EngineError(str(e)) from e
-        self._ingest(Chunk(time.time(), SENT, data))
+        self._ingest(Chunk(time.time(), channel, data))
         # a sent message is complete as soon as it is written
-        for f in self._framer.flush_channel(SENT):
+        for f in self._framer.flush_channel(channel):
             self._add_frame(f)
+
+    def _parse_out(self, text: str):
+        if self.is_can:
+            arb, data, ext = can_source.parse_can_text(text)
+            return data, (arb, ext)
+        return parse_hex(text), None
 
     async def send(self, hex_str: str, repeat_ms: int | None = None, count: int = 1,
                    wait_ms: int = 0, return_replies: bool = False):
-        data = parse_hex(hex_str)
+        self._check_can_send()
+        data, can_id = self._parse_out(hex_str)
         if wait_ms and not repeat_ms:
-            self._check_can_send()
             self.stop_repeat()
             before = len(self.frames)
-            await self._write(data)
+            await self._write(data, can_id)
             deadline = time.time() + min(5000, int(wait_ms)) / 1000
             while time.time() < deadline:
                 await asyncio.sleep(0.02)
-            replies = [f for f in self.frames[before:] if f.channel != SENT]
+            replies = [f for f in self.frames[before:] if not is_sent(f.channel)]
             return replies if return_replies else data
         self._check_can_send()
         self.stop_repeat()
@@ -329,14 +358,14 @@ class Engine:
             async def loop():
                 n = 0
                 while count <= 1 or n < count:
-                    await self._write(data)
+                    await self._write(data, can_id)
                     n += 1
                     await asyncio.sleep(interval)
             self._repeat = asyncio.create_task(self._guard(loop()))
             self._emit({"type": "status", "status": self.status()})
         else:
             for _ in range(max(1, int(count))):
-                await self._write(data)
+                await self._write(data, can_id)
         return data
 
     async def replay(self, frame_ids: list[int], keep_timing: bool = True) -> int:
@@ -352,7 +381,7 @@ class Engine:
             for f in frames:
                 if keep_timing and prev is not None:
                     await asyncio.sleep(min(2.0, max(0.0, f.t_start - prev)))
-                await self._write(f.data)
+                await self._write(f.data, can_source.channel_to_id(f.channel) if self.is_can else None)
                 prev = f.t_start
             self._emit({"type": "status", "status": self.status()})
         self._repeat = asyncio.create_task(self._guard(run()))
@@ -383,7 +412,7 @@ class Engine:
         try:
             return self._types[f.id]
         except KeyError:
-            t = proto_mod.match_type(self.protocol, f.data)
+            t = proto_mod.match_type(self.protocol, f.data, f.channel)
             self._types[f.id] = t
             return t
 

@@ -11,6 +11,11 @@ MASTER = "master→slave"
 SLAVE = "slave→master"
 
 
+def is_sent(channel: str) -> bool:
+    """Messages Tapline transmitted itself ('sent', 'sent CAN 0x300', 'sent I²C 0x3C')."""
+    return channel == SENT or channel.startswith(SENT + " ")
+
+
 @dataclass
 class Chunk:
     """Raw bytes as they arrived from a source."""
