@@ -21,3 +21,7 @@ class Source:
 
     async def write(self, data: bytes) -> None:
         raise NotImplementedError(f"{self.name} cannot send data")
+
+
+class SourceError(Exception):
+    """A source could not start; the message is written for the user."""
