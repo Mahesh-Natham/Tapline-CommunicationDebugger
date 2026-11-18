@@ -1,1 +1,232 @@
-<!doctype html><title>Tapline</title>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tapline</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%234f7cff'/%3E%3Cpath d='M6 20h5l3-8 4 12 3-7h5' stroke='white' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8"/><path d="M6 20h5l3-8 4 12 3-7h5"/></svg>
+    <span>Tapline</span>
+  </div>
+
+  <div class="group" id="sourceGroup" data-tour="source">
+    <label class="field">
+      <span>Source</span>
+      <div class="row-inline">
+        <select id="source"></select>
+        <button class="icon" id="refreshPorts" title="Refresh port list" aria-label="Refresh port list">↻</button>
+      </div>
+    </label>
+    <label class="field serial-only"><span>Baud</span>
+      <div class="row-inline">
+        <select id="baud"></select>
+        <input id="baudCustom" class="hidden narrow" type="number" min="50" max="12000000" placeholder="custom">
+      </div>
+    </label>
+    <label class="field serial-only"><span>Data</span><select id="bytesize"></select></label>
+    <label class="field serial-only"><span>Parity</span><select id="parity"></select></label>
+    <label class="field serial-only"><span>Stop</span><select id="stopbits"></select></label>
+    <button class="ghost" id="detectBtn" title="Listen and guess baud rate and format (never transmits)">✨ Detect</button>
+    <button class="ghost tiny serial-only" id="secondBtn" title="Listen to the display's replies on a second adapter">+ 2nd adapter</button>
+    <label class="field hidden" id="secondWrap"><span>Display → controller</span><select id="source2"></select></label>
+  </div>
+
+  <div class="group right">
+    <button class="primary" id="startBtn" data-tour="start">▶ Start</button>
+    <div class="seg" id="modeSeg" role="tablist" aria-label="Mode" data-tour="mode">
+      <button data-mode="sniff" class="on" title="Listen only — never transmits">Sniff</button>
+      <button data-mode="send" title="Send your own messages to the display">Send</button>
+    </div>
+  </div>
+</header>
+
+<div id="subbar">
+  <div class="group">
+    <label class="field inline"><span>Framing</span><select id="frameKind">
+      <option value="gap">Silence gap</option>
+      <option value="delimiter">Start / end bytes</option>
+      <option value="length">Header + length byte</option>
+      <option value="fixed">Fixed length</option>
+    </select></label>
+    <span id="frameParams" class="row-inline"></span>
+    <button class="ghost tiny" id="applyFraming">Apply</button>
+    <button class="ghost tiny" id="guessFraming" title="Try common framings on the data and rank them">Guess</button>
+  </div>
+  <div class="group right muted" id="statusText">Not capturing</div>
+</div>
+
+<main id="main">
+  <section id="framesPane" class="pane">
+    <div class="pane-head">
+      <strong>Messages</strong>
+      <input id="filter" type="search" placeholder="Filter: hex, type or channel" aria-label="Filter messages">
+      <label class="toggle" title="Keep the newest message in view"><input type="checkbox" id="follow" checked> Follow</label>
+    </div>
+    <div id="frames" tabindex="0" aria-label="Captured messages">
+      <button id="loadOlder" class="ghost tiny hidden">Load older</button>
+      <div id="rows"></div>
+      <div id="empty" class="empty">
+        <div class="empty-art">〰</div>
+        <p><strong>No messages yet.</strong></p>
+        <p class="muted">Pick <em>Simulator (demo)</em> and press <strong>Start</strong> to try Tapline without any hardware,<br>or choose your USB-TTL adapter's port.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="sidePane" class="pane">
+    <nav class="tabs" role="tablist">
+      <button data-tab="inspect" class="on">Inspect</button>
+      <button data-tab="find" data-tour="find">Find value</button>
+      <button data-tab="map">Byte map</button>
+      <button data-tab="checksum">Checksum</button>
+      <button data-tab="protocol">Protocol</button>
+      <button data-tab="compose" data-tour="compose">Composer</button>
+    </nav>
+
+    <div class="tab-body" id="tab-inspect">
+      <div id="inspectEmpty" class="empty small"><p class="muted">Click a message to inspect it.<br>Hover a byte to see it as a number, character and bits. Drag across bytes to name them as a field.</p></div>
+      <div id="inspect" class="hidden">
+        <div class="insp-head">
+          <div><strong id="inspTitle"></strong> <span id="inspMeta" class="muted"></span></div>
+          <div id="inspBadges"></div>
+        </div>
+        <div id="cells" class="cells" aria-label="Bytes of the selected message"></div>
+        <div id="selInfo" class="selinfo hidden"></div>
+        <form id="fieldForm" class="card hidden" autocomplete="off">
+          <div class="card-title">Name these bytes</div>
+          <div class="grid2">
+            <label class="field"><span>Message type</span><input id="ffType" required></label>
+            <label class="field"><span>Matches messages starting</span><input id="ffMatch" title="Hex, ?? = any byte"></label>
+            <label class="field"><span>Field name</span><input id="ffName" required placeholder="e.g. temperature"></label>
+            <label class="field"><span>Read as</span><select id="ffKind"></select></label>
+            <label class="field"><span>Scale</span><input id="ffScale" type="number" step="any" value="1"></label>
+            <label class="field"><span>Unit</span><input id="ffUnit" placeholder="°C, %, rpm…"></label>
+          </div>
+          <div class="preview muted" id="ffPreview"></div>
+          <div class="actions"><button type="button" class="ghost" id="ffCancel">Cancel</button><button class="primary">Save field</button></div>
+        </form>
+        <div id="decoded"></div>
+        <div id="diffBox" class="hidden"></div>
+        <div class="actions wrap">
+          <button class="ghost" id="diffPrev">Compare with previous</button>
+          <button class="ghost" id="copyHex">Copy hex</button>
+          <button class="primary soft" id="editSend">Edit &amp; send</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-body hidden" id="tab-find">
+      <p class="muted">Saw something on the display? Type it here. Tapline looks for it in every common encoding (bytes, 16/32-bit, BCD, text, ×10, ×100).</p>
+      <form id="findForm" class="row-inline">
+        <input id="findQ" placeholder="e.g. 25, 25.5, -3, 0x19, READY" aria-label="Value to find">
+        <button class="primary">Find</button>
+      </form>
+      <div id="findResults"></div>
+      <h4>Your markers</h4>
+      <p class="muted small">Press <kbd>Space</kbd> any time something happens on the display.</p>
+      <div id="markerList"></div>
+    </div>
+
+    <div class="tab-body hidden" id="tab-map">
+      <p class="muted">Which bytes stay the same, which change, and which count up — across all messages of one kind.</p>
+      <form id="mapForm" class="row-inline">
+        <select id="mapType"></select>
+        <input id="mapPrefix" placeholder="or starting with… e.g. 5A A5 ?? 10" class="mono">
+        <button class="primary">Show</button>
+      </form>
+      <div class="legend">
+        <span class="lg constant">constant</span><span class="lg rare">rarely changes</span>
+        <span class="lg varies">changes</span><span class="lg counter">counter</span>
+      </div>
+      <div id="mapOut"></div>
+    </div>
+
+    <div class="tab-body hidden" id="tab-checksum">
+      <p class="muted">Many protocols end with a checksum byte. Tapline tries sum, XOR and common CRCs on every message.</p>
+      <div class="row-inline"><button class="primary" id="findCs">Find checksum</button><span id="csCurrent" class="muted"></span></div>
+      <div id="csOut"></div>
+    </div>
+
+    <div class="tab-body hidden" id="tab-protocol">
+      <div class="card">
+        <div class="card-title">Project</div>
+        <div class="row-inline">
+          <select id="projectSel"></select>
+          <input id="projectNew" placeholder="new project name">
+          <button class="ghost" id="projectOpen">Open</button>
+        </div>
+        <div class="row-inline" style="margin-top:8px">
+          <select id="sessionSel"><option value="">Saved captures…</option></select>
+          <button class="ghost" id="sessionLoad">Open capture</button>
+        </div>
+      </div>
+      <div id="protoOut"></div>
+      <div class="actions wrap">
+        <a class="btn ghost" href="api/export/frames.csv" download>Export messages (CSV)</a>
+        <a class="btn ghost" href="api/export/protocol.json" download>Export protocol (JSON)</a>
+        <button class="ghost" id="tourAgain">Show the tour again</button>
+      </div>
+    </div>
+
+    <div class="tab-body hidden" id="tab-compose">
+      <div id="composeLocked" class="notice">
+        <strong>Sniff mode is on — Tapline is only listening.</strong>
+        <p>To test a guess, switch to <strong>Send</strong> mode at the top right.</p>
+      </div>
+      <div id="composeBox">
+        <label class="field"><span>Message (hex)</span>
+          <textarea id="composeHex" class="mono" rows="3" spellcheck="false" placeholder="5A A5 03 30 32 65"></textarea>
+        </label>
+        <label class="toggle"><input type="checkbox" id="autoFix" checked> Fix length byte &amp; checksum automatically</label>
+        <div id="composeFields"></div>
+        <div class="actions wrap">
+          <button class="primary" id="sendBtn">Send</button>
+          <span class="row-inline">every <input id="repeatMs" type="number" class="narrow" value="500" min="10"> ms <button class="ghost" id="repeatBtn">Repeat</button></span>
+          <button class="ghost" id="stopSend">Stop</button>
+          <button class="ghost" id="replaySel" title="Re-send the selected message and the ones after it, with original timing">Replay from selected</button>
+        </div>
+        <div id="verdictBox" class="card hidden">
+          <div class="card-title">Did the display do what you expected?</div>
+          <input id="verdictNote" placeholder="What happened? (optional)">
+          <div class="actions">
+            <button class="ok" data-ok="1">✓ Yes, as expected</button>
+            <button class="bad" data-ok="0">✗ No</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer id="toolbar">
+  <button class="pill amber" id="markBtn" data-tour="mark">★ Mark event <kbd>Space</kbd></button>
+  <span class="muted small" id="hint">Tip: hover any byte · click a byte to highlight that position in every message</span>
+</footer>
+
+<div id="tooltip" class="tooltip hidden" role="tooltip"></div>
+<div id="toasts" aria-live="polite"></div>
+
+<div id="markerPop" class="popover hidden">
+  <form id="markerForm">
+    <div class="card-title">What just happened?</div>
+    <input id="markerLabel" placeholder="e.g. display shows 25.0 °C" maxlength="200">
+    <div class="actions"><button type="button" class="ghost" id="markerCancel">Cancel</button><button class="primary">Add marker</button></div>
+  </form>
+</div>
+
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-card" id="modalCard"></div>
+</div>
+
+<div id="tour" class="tour hidden">
+  <div class="tour-card" id="tourCard"></div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
