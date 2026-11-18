@@ -178,3 +178,32 @@ async def test_serial_link_type_recorded(engine):
     await engine.start("simulator", speed=20, link="rs232")
     assert engine.status()["link"] == "rs232"
     await engine.stop()
+
+
+needs_sigrok = pytest.mark.skipif(not __import__("shutil").which("sigrok-cli"), reason="no sigrok-cli")
+
+
+@needs_sigrok
+async def test_logic_analyzer_demo_i2c(engine):
+    await engine.start("sim-la", opts={"protocol": "i2c"})
+    await wait_for(lambda: not engine.running, timeout=10)
+    await engine.stop()
+    chans = [f.channel for f in engine.frames]
+    assert chans.count("I²C 0x3C write") == 2 and chans.count("I²C 0x48 read") == 2
+    assert engine.status()["rule"]["kind"] == "native"
+
+
+@needs_sigrok
+async def test_logic_analyzer_demo_uart_frames_whole(engine):
+    await engine.start("sim-la", opts={"protocol": "uart"})
+    await wait_for(lambda: not engine.running, timeout=10)
+    await engine.stop()
+    assert [f.hex()[:11] for f in engine.frames][:4] == ["5A A5 04 10"] * 3 + ["5A A5 03 20"]
+
+
+async def test_sigrok_missing_is_friendly(engine, monkeypatch):
+    from tapline.sources import sigrok
+    monkeypatch.setattr(sigrok, "available", lambda: None)
+    with pytest.raises(EngineError) as e:
+        await engine.start("sim-la", opts={"protocol": "i2c"})
+    assert "sigrok-cli is not installed" in str(e.value)

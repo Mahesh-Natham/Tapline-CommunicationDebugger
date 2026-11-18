@@ -190,3 +190,21 @@ def test_modbus_demo_summaries_build_and_wait(client):
     client.post("/api/mode", json={"mode": "send"})
     r = client.post("/api/send", json={"hex": b["hex"], "wait_ms": 300}).json()
     assert r["replies"] and r["replies"][0]["modbus"]["fn"] == 6
+
+
+@pytest.mark.skipif(not __import__("shutil").which("sigrok-cli"), reason="no sigrok-cli")
+def test_sigrok_import_channels_and_decode(client, tmp_path):
+    import base64
+    from tapline import la_sim
+    p = la_sim.demo_capture(tmp_path / "board.sr")
+    info = client.get("/api/sigrok").json()
+    assert info["available"] is True
+    r = client.post("/api/sigrok/import", json={"name": "board.sr", "data_b64": base64.b64encode(p.read_bytes()).decode()})
+    assert r.status_code == 200
+    f = r.json()["file"]
+    assert client.post("/api/sigrok/channels", json={"file": f}).json()["channels"][:3] == ["TX", "SCL", "SDA"]
+    assert client.post("/api/sigrok/import", json={"name": "../x.sr", "data_b64": "AA=="}).status_code == 400
+    r = client.post("/api/start", json={"source": "sigrok", "opts": {"file": f, "spec": la_sim.DEMO_SPECS["spi"]}})
+    assert r.status_code == 200
+    items = wait_frames(client, 4)["items"]
+    assert {"SPI MOSI", "SPI MISO"} <= {i["channel"] for i in items}

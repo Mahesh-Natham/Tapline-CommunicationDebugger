@@ -4,12 +4,15 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+from pathlib import Path
 
 from . import protocol as proto_mod
-from .framing import GapRule, ModbusRule, Rule, StreamFramer, rule_from_json, rule_to_json
+from .framing import GapRule, ModbusRule, NativeRule, Rule, StreamFramer, rule_from_json, rule_to_json
 from .model import CTRL_TO_DISP, DISP_TO_CTRL, SENT, Chunk, Frame, Marker, SerialConfig
 from .rs485 import RoleTracker
 from .sources.modbus_sim import ModbusSimSource
+from .sources import sigrok
+from . import la_sim
 from .project import Project
 from .sources.base import Source, SourceError
 from .sources.serial_source import SerialSource
@@ -104,6 +107,8 @@ class Engine:
             sources = [ModbusSimSource(speed=speed)]
             label = "Modbus RS-485 simulator (demo)"
             link, auto_rule = "rs485", ModbusRule()
+        elif kind in ("sigrok", "sim-la"):
+            sources, label, auto_rule = self._sigrok_sources(kind, opts or {})
         elif kind == "serial":
             if not cfg or not cfg.port:
                 raise EngineError("Choose a serial port first")
@@ -147,9 +152,54 @@ class Engine:
         self._tasks.append(asyncio.create_task(self._ticker(), name="ticker"))
         self._emit({"type": "status", "status": self.status()})
 
+    def _sigrok_sources(self, kind: str, opts: dict):
+        if not sigrok.available():
+            raise EngineError("sigrok-cli is not installed. Install it from sigrok.org "
+                              "(Linux: sudo apt install sigrok-cli) to use a logic analyzer.")
+        cap_dir = (self.project.root if self.project else Path.home() / "Tapline") / "captures"
+        cap_dir.mkdir(parents=True, exist_ok=True)
+        device = None
+        if kind == "sim-la":
+            proto = opts.get("protocol", "uart")
+            if proto not in la_sim.DEMO_SPECS:
+                raise EngineError("Demo protocol must be uart, i2c or spi")
+            file = la_sim.demo_capture(cap_dir / "demo-board.sr")
+            spec, label = la_sim.DEMO_SPECS[proto], f"Logic analyzer demo ({proto.upper()})"
+        else:
+            spec = opts.get("spec") or {}
+            if opts.get("device"):
+                d = dict(opts["device"])
+                if not d.get("driver"):
+                    raise EngineError("Choose a logic analyzer (press Scan)")
+                d["out"] = str(cap_dir / time.strftime("capture-%Y%m%d-%H%M%S.sr"))
+                device, file = d, None
+                label = f"Logic analyzer {d['driver']} · {spec.get('protocol', '').upper()}"
+            else:
+                file = self.capture_path(opts.get("file", ""))
+                label = f"Capture {file.name} · {spec.get('protocol', '').upper()}"
+        proto = spec.get("protocol")
+        if proto == "uart" or (proto == "spi" and not spec.get("cs")):
+            rule = GapRule(1)
+        else:
+            rule = NativeRule()
+        src = sigrok.SigrokSource(spec, file=file, device=device,
+                                  on_status=lambda m: self._emit({"type": "progress", "message": m}))
+        return [src], label, rule
+
+    def capture_path(self, name: str) -> Path:
+        if not name or "/" in name or "\\" in name or ".." in name or not name.endswith(".sr"):
+            raise EngineError("Choose a .sr capture file")
+        p = (self.project.root if self.project else Path.home() / "Tapline") / "captures" / name
+        if not p.exists():
+            raise EngineError("Capture file not found")
+        return p
+
     async def _pump(self, src: Source):
         async for c in src.chunks():
             self._ingest(c)
+        if getattr(src, "offline", False):
+            for f in self._framer.flush():
+                self._add_frame(f)
         if src.error:
             self.error = src.error
             self._emit({"type": "error", "message": src.error})
@@ -158,6 +208,8 @@ class Engine:
     async def _ticker(self):
         while True:
             await asyncio.sleep(0.02)
+            if any(getattr(s, "offline", False) for s in self.sources):
+                continue  # recorded data: timestamps are in the past, silence means nothing
             for f in self._framer.flush_idle(time.time()):
                 self._add_frame(f)
 

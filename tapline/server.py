@@ -12,7 +12,12 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from . import autodetect, modbus, protocol as P
+import base64
+import binascii
+
+from . import autodetect, la_sim, modbus, protocol as P
+from .sources import sigrok
+from .sources.base import SourceError
 from .checksums import ChecksumSpec, check, find_checksums
 from .diff import diff_frames, variability
 from .engine import Engine, EngineError, SendNotAllowed, parse_hex
@@ -380,6 +385,45 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
             return {"sent": data.hex(" ").upper(), "replies": [frame_json(f) for f in replies], "status": status()}
         data = await engine.send(d.get("hex", ""), d.get("repeat_ms"), int(d.get("count", 1) or 1))
         return {"sent": data.hex(" ").upper(), "status": status()}
+
+    # -- logic analyzer -----------------------------------------------------------------
+    @app.get("/api/sigrok")
+    async def sigrok_info():
+        return {"available": bool(sigrok.available()), "demo_specs": la_sim.DEMO_SPECS,
+                "captures": sorted(p.name for p in (engine.project.root / "captures").glob("*.sr"))
+                if engine.project and (engine.project.root / "captures").exists() else []}
+
+    @app.post("/api/sigrok/scan")
+    async def sigrok_scan():
+        try:
+            return {"devices": await sigrok.scan()}
+        except SourceError as e:
+            raise EngineError(str(e))
+
+    @app.post("/api/sigrok/import")
+    async def sigrok_import(req: Request):
+        d = await body(req)
+        name = Path(str(d.get("name", "capture.sr"))).name
+        if name != d.get("name") or not name.endswith(".sr") or ".." in name:
+            raise ValueError("Pick a .sr file saved by PulseView or sigrok-cli")
+        try:
+            raw = base64.b64decode(d.get("data_b64", ""), validate=True)
+        except (binascii.Error, ValueError):
+            raise ValueError("The file could not be read")
+        if not raw or len(raw) > 200 * 1024 * 1024:
+            raise ValueError("The file is empty or larger than 200 MB")
+        cap = engine.project.root / "captures"
+        cap.mkdir(parents=True, exist_ok=True)
+        (cap / name).write_bytes(raw)
+        return {"file": name}
+
+    @app.post("/api/sigrok/channels")
+    async def sigrok_channels(req: Request):
+        d = await body(req)
+        try:
+            return {"channels": await sigrok.channels(engine.capture_path(d.get("file", "")))}
+        except SourceError as e:
+            raise EngineError(str(e))
 
     @app.post("/api/modbus/build")
     async def modbus_build(req: Request):
