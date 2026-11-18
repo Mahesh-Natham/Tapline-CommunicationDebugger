@@ -42,8 +42,18 @@ function fmtTime(t) {
   const p = (n, l = 2) => String(n).padStart(l, "0");
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
 }
-function chanClass(c) { return c === "sent" ? "sent" : c.startsWith("disp") ? "d2c" : "c2d"; }
-function chanLabel(c) { return c === "sent" ? "you sent" : c.replace("ctrl", "ctrl ").replace("disp", " disp").replace(/\s+/g, " "); }
+function isSent(c) { return c === "sent" || c.startsWith("sent "); }
+function chanClass(c) {
+  if (isSent(c)) return "sent";
+  if (/^(disp|slave)|read$|MISO$/.test(c)) return "d2c";
+  if (/^(ctrl|master)|write$|MOSI$/.test(c)) return "c2d";
+  return "oth";
+}
+function chanLabel(c) {
+  if (c === "sent") return "you sent";
+  if (c.startsWith("sent ")) return "you → " + c.slice(5);
+  return c.replace("ctrl→disp", "ctrl → disp").replace("disp→ctrl", "disp → ctrl").replace("master→slave", "master → slave").replace("slave→master", "slave → master");
+}
 function byteInfo(b, idx, bytes) {
   const ch = b >= 32 && b < 127 ? `'${String.fromCharCode(b)}'` : "·";
   const s8 = b > 127 ? b - 256 : b;
@@ -60,21 +70,43 @@ function fillSelect(sel, items, value) {
   sel.innerHTML = items.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("");
   if (value !== undefined) sel.value = String(value);
 }
+const DEMOS = [["simulator", "UART display (demo)"], ["sim-modbus", "RS-485 Modbus device (demo)"],
+  ["sim-la:uart", "Logic analyzer · UART (demo)"], ["sim-la:i2c", "Logic analyzer · I²C (demo)"],
+  ["sim-la:spi", "Logic analyzer · SPI (demo)"], ["sim-can", "CAN bus · car (demo)"]];
+function optgroup(label, items) {
+  return `<optgroup label="${esc(label)}">${items.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join("")}</optgroup>`;
+}
 async function loadPorts() {
   const r = await api("ports");
   S.ports = r.ports;
   const prev = $("#source").value || store("tl.source") || "simulator";
-  const items = [["simulator", "Simulator (demo, no hardware)"]].concat(
-    r.ports.map(p => [p.device, `${p.device} — ${p.description}${p.vid ? ` (${p.vid}:${p.pid})` : ""}`]));
-  fillSelect($("#source"), items);
-  $("#source").value = items.some(i => i[0] === prev) ? prev : "simulator";
-  fillSelect($("#source2"), [["", "— none —"]].concat(r.ports.map(p => [p.device, p.device])));
+  const ports = r.ports.map(p => [p.device, `${p.device} — ${p.description}${p.vid ? ` (${p.vid}:${p.pid})` : ""}`]);
+  $("#source").innerHTML = optgroup("Try without hardware", DEMOS) +
+    optgroup("Serial ports (USB-TTL, RS-232, RS-485)", ports.length ? ports : [["", "No serial ports found — plug in an adapter, press ↻"]]) +
+    optgroup("Logic analyzer", [["la-device", "Capture from a logic analyzer (sigrok)"], ["la-file", "Open a capture file (.sr)"]]) +
+    optgroup("CAN bus", [["can", "CAN adapter"]]);
+  const values = $$("#source option").map(o => o.value);
+  $("#source").value = values.includes(prev) && prev ? prev : "simulator";
+  const portItems = r.ports.map(p => [p.device, p.device]);
+  fillSelect($("#source2"), [["", "— none —"]].concat(portItems));
+  fillSelect($("#picoPort"), portItems.length ? portItems : [["", "No serial ports"]], store("tl.picoPort") || undefined);
   onSourceChange();
 }
+function sourceKind(v) {
+  if (v === "la-device") return "ladev";
+  if (v === "la-file") return "lafile";
+  if (v === "can") return "can";
+  if (v === "simulator" || v.startsWith("sim")) return "demo";
+  return "serial";
+}
 function onSourceChange() {
-  const sim = $("#source").value === "simulator";
-  document.body.classList.toggle("is-sim", sim);
-  store("tl.source", $("#source").value);
+  const v = $("#source").value;
+  const kind = sourceKind(v);
+  document.body.className = document.body.className.replace(/\b(kind|src)-\S+/g, "").trim();
+  document.body.classList.add("kind-" + kind, "src-" + (v === "simulator" ? "simulator" : "x"));
+  store("tl.source", v);
+  if (kind === "ladev" || kind === "lafile") { renderLaPins(); if (kind === "lafile") loadCaptures(); }
+  if (kind === "can") loadCan();
 }
 function setupSettings() {
   const o = S.options;
@@ -110,19 +142,24 @@ async function toggleStart() {
   if (S.status.running) { await safe(async () => applyStatus(await api("stop", {}))); return; }
   const src = $("#source").value;
   await safe(async () => {
-    const body = src === "simulator" ? { source: "simulator" } : { source: "serial", config: currentConfig(src) };
-    if (src !== "simulator" && $("#source2").value && !$("#secondWrap").classList.contains("hidden")) body.config2 = currentConfig($("#source2").value);
+    const body = startBody(src);
+    if (sourceKind(src) === "serial" && $("#source2").value && !$("#secondWrap").classList.contains("hidden")) body.config2 = currentConfig($("#source2").value);
     const st = await api("start", body);  // throws on failure: keep what's on screen
     S.frames = []; S.byId.clear(); S.markers = []; S.selected = null; S.windowEnd = null; S.oldestLoaded = null;
     renderAll(); clearInspect();
     applyStatus(st);
-    toast(src === "simulator" ? "Demo running — watch the messages arrive" : `Listening on ${src}`, "ok");
+    toast(sourceKind(src) === "demo" ? "Demo running — watch the messages arrive" : sourceKind(src).startsWith("la") ? "Logic analyzer: capturing and decoding…" : `Listening — ${st.source}`, "ok");
   });
 }
 
 /* ---------------- status ---------------- */
 function applyStatus(st) {
   S.status = st;
+  $("#modbusBox").classList.toggle("hidden", st.link !== "rs485");
+  const can = st.source_kind === "can" || st.source_kind === "sim-can";
+  $("#composeLabel").textContent = can ? "CAN message (ID#DATA, e.g. 300#01 or 18FF50E5#01A2)" : "Message (hex)";
+  $("#composeHex").placeholder = can ? "300#01" : "5A A5 03 30 32 65";
+  $("#picoState").textContent = st.pico ? `connected on ${st.pico}` : "not connected";
   const b = $("#startBtn");
   b.classList.toggle("running", !!st.running);
   b.textContent = st.running ? "■ Stop" : "▶ Start";
@@ -141,6 +178,8 @@ const FRAME_PARAMS = {
   length: [["header", "header", "hex", "text"], ["len_offset", "length at byte", "", "number"],
            ["len_size", "size", "", "select12"], ["len_adjust", "adjust", "", "number"]],
   fixed: [["length", "every", "bytes", "number"]],
+  modbus: [],
+  native: [],
 };
 function showRule(rule) {
   $("#frameKind").value = rule.kind;
@@ -179,6 +218,8 @@ async function guessFraming() {
 function ruleText(r) {
   if (r.kind === "gap") return `New message after ${r.gap_ms} ms of silence`;
   if (r.kind === "delimiter") return `Messages ${r.start ? "start with " + r.start.toUpperCase() : ""}${r.start && r.end ? " and " : ""}${r.end ? "end with " + r.end.toUpperCase() : ""}`;
+  if (r.kind === "modbus") return "Modbus RTU messages (cut where the CRC checks out)";
+  if (r.kind === "native") return "As delivered by the bus (I²C transaction, SPI transfer, CAN frame)";
   if (r.kind === "length") return `Start with ${r.header.toUpperCase()}, length in byte ${r.len_offset}${r.len_size === 2 ? " (2 bytes)" : ""}${r.len_adjust ? `, adjust ${r.len_adjust > 0 ? "+" : ""}${r.len_adjust}` : ""}`;
   return `Every ${r.length} bytes`;
 }
@@ -191,7 +232,7 @@ function frameRow(f, fresh) {
   const flags = (f.flags || []).map(x => `<span class="flag">${esc(x)}</span>`).join("");
   return `<div class="frow${S.selected === f.id ? " sel" : ""}${fresh ? " new" : ""}" data-id="${f.id}">
     <span class="t">${fmtTime(f.t_start)}</span><span class="chan ${chanClass(f.channel)}">${esc(chanLabel(f.channel))}</span>
-    <span class="body">${f.type ? `<span class="tname">${esc(f.type)}</span>` : ""}${flags}<span class="hex">${shown}${more}</span></span></div>`;
+    <span class="body">${f.type ? `<span class="tname">${esc(f.type)}</span>` : ""}${f.modbus ? `<span class="mb" title="${esc(f.modbus.summary)}">${esc(f.modbus.summary)}</span>` : ""}${flags}<span class="hex">${shown}${more}</span></span></div>`;
 }
 function markerRow(m, i) {
   return `<div class="mrow" data-marker="${i}"><span>★</span><span class="t">${fmtTime(m.t)}</span><span>${esc(m.label)}</span></div>`;
@@ -309,6 +350,11 @@ async function inspect(id, opts = {}) {
   (f.flags || []).forEach(x => badges += `<span class="badge bad">${esc(x)}</span>`);
   $("#inspBadges").innerHTML = badges;
   renderDecoded(dec);
+  if (f.modbus) {
+    const m = f.modbus, regs = m.registers || m.coils || m.bits;
+    $("#decoded").insertAdjacentHTML("afterbegin", `<div class="card"><div class="card-title">Modbus ${esc(m.kind)}</div><div>${esc(m.summary)}</div>
+      ${regs ? `<table class="kv">${regs.slice(0, 40).map((v, i) => `<tr><td>${m.start !== undefined ? "address " + (m.start + i) : "#" + i}</td><td class="v">${esc(v)}</td></tr>`).join("")}</table>` : ""}</div>`);
+  }
 }
 function fieldSize(t) {
   const m = { u8: 1, i8: 1, u16le: 2, u16be: 2, i16le: 2, i16be: 2, u32le: 4, u32be: 4, i32le: 4, i32be: 4 };
@@ -397,6 +443,10 @@ function openFieldForm() {
   $("#ffType").value = t ? t.name : `Message ${(bs[3] ?? bs[0] ?? 0).toString(16).toUpperCase().padStart(2, "0")}`;
   $("#ffMatch").value = t ? t.match : match;
   $("#ffName").value = ""; $("#ffScale").value = 1; $("#ffUnit").value = "";
+  const scoped = !/^(ctrl|disp|master|slave|sent$|bus$)/.test(f.channel);
+  $("#ffChanWrap").classList.toggle("hidden", !scoped);
+  $("#ffChan").checked = scoped && !t; $("#ffChanName").textContent = f.channel.replace(/^sent /, "");
+  if (scoped && !t) { $("#ffMatch").value = ""; $("#ffType").value = f.channel.replace(/^sent /, "").replace(/^CAN /, "ID "); }
   $("#fieldForm").classList.remove("hidden");
   updateFieldPreview();
   $("#ffName").focus();
@@ -418,7 +468,9 @@ async function saveField(e) {
   e.preventDefault();
   const [a] = S.selRange;
   await safe(async () => {
+    const f0 = S.byId.get(S.selected);
     S.protocol = await api("protocol/field", { type: $("#ffType").value.trim(), match: $("#ffMatch").value.trim().toUpperCase(),
+      channel: $("#ffChan").checked && f0 ? f0.channel : "",
       field: { name: $("#ffName").value.trim(), offset: a, type: $("#ffKind").value, scale: parseFloat($("#ffScale").value) || 1, unit: $("#ffUnit").value.trim() } });
     toast(`Saved “${$("#ffName").value.trim()}” — every matching message now shows it`, "ok");
     $("#fieldForm").classList.add("hidden");
@@ -593,7 +645,8 @@ function sendChecklist() {
 }
 async function editAndSend() {
   const f = S.byId.get(S.selected); if (!f) return;
-  $("#composeHex").value = f.hex;
+  const canId = (f.channel.match(/CAN 0x([0-9A-F]+)$/) || [])[1];
+  $("#composeHex").value = canId ? `${canId}#${f.hex.replace(/ /g, "")}` : f.hex;
   S.composeBase = f.id;
   await renderComposeFields(f);
   switchTab("compose");
@@ -614,6 +667,7 @@ async function renderComposeFields(f) {
 }
 async function prepareHex() {
   let hex = $("#composeHex").value;
+  if (hex.includes("#")) return hex;  // CAN text: nothing to fix
   if ($("#autoFix").checked && (S.protocol.checksum || S.protocol.framing.kind === "length")) {
     hex = (await api("finalize", { hex })).hex;
     $("#composeHex").value = hex;
@@ -621,11 +675,15 @@ async function prepareHex() {
   return hex;
 }
 async function doSend(repeat) {
+  const target = $("#target").value;
+  if (target !== "source") { if (repeat) toast("Repeat is for the current source; sending once"); return picoSend(target === "pico-i2c" ? "i2c" : "spi"); }
   await safe(async () => {
     const hex = await prepareHex();
     const body = { hex };
     if (repeat) body.repeat_ms = parseInt($("#repeatMs").value, 10) || 500;
+    else if ($("#waitReply").checked) body.wait_ms = parseInt($("#waitMs").value, 10) || 300;
     const r = await api("send", body);
+    showReplies(r.replies);
     S.lastSent = r.sent;
     applyStatus(r.status);
     toast(repeat ? `Repeating every ${body.repeat_ms} ms` : `Sent ${r.sent}`, "ok");
@@ -731,6 +789,7 @@ function connect() {
     }
     else if (m.type === "reframed") reloadFrames();
     else if (m.type === "error") toast(m.message, "err");
+    else if (m.type === "progress" && m.message) toast(m.message);
     else if (m.type === "detect_progress" && $("#detBar")) {
       $("#detBar").style.width = Math.round(m.done / m.total * 100) + "%";
       $("#detLabel").textContent = m.label ? `Trying ${m.label}… (${m.done}/${m.total})` : "";
@@ -796,6 +855,18 @@ function bind() {
   $("#repeatBtn").onclick = () => doSend(true);
   $("#stopSend").onclick = () => safe(async () => { applyStatus(await api("send/stop", {})); toast("Stopped sending"); });
   $("#replaySel").onclick = replaySelected;
+  $("#wiringBtn").onclick = () => wiringGuide();
+  $("#laScan").onclick = laScan;
+  $("#laProto").onchange = renderLaPins;
+  $("#laFile").onchange = renderLaPins;
+  $("#laDevice").onchange = renderLaPins;
+  $("#laImport").onchange = laImport;
+  $("#target").onchange = onTargetChange;
+  $("#picoConnect").onclick = picoConnect;
+  $("#picoScan").onclick = picoScan;
+  $("#mbFn").onchange = onMbFn;
+  $("#mbBuild").onclick = mbBuild;
+  $("#picoGuide").onclick = () => wiringGuide("pico");
   $$("#verdictBox [data-ok]").forEach(b => b.onclick = () => verdict(b.dataset.ok === "1"));
   $("#modal").addEventListener("click", e => { if (e.target.id === "modal" || e.target.closest("[data-close]")) closeModal(); });
   document.addEventListener("keydown", e => {
@@ -811,8 +882,221 @@ function bind() {
   });
 }
 
+
+/* ---------------- start body per source ---------------- */
+function startBody(src) {
+  if (src === "simulator" || src === "sim-modbus" || src === "sim-can") return { source: src };
+  if (src.startsWith("sim-la:")) return { source: "sim-la", opts: { protocol: src.split(":")[1] } };
+  if (src === "la-device" || src === "la-file") {
+    const spec = laSpec();
+    if (src === "la-file") {
+      if (!$("#laFile").value) throw new Error("Import or choose a .sr capture file first");
+      return { source: "sigrok", opts: { file: $("#laFile").value, spec } };
+    }
+    if (!$("#laDevice").value) throw new Error("Press Scan and choose your logic analyzer");
+    const dev = S.laDevices.find(d => d.driver === $("#laDevice").value);
+    return { source: "sigrok", opts: { spec, device: { driver: dev.driver, samplerate: $("#laRate").value,
+      seconds: parseFloat($("#laSeconds").value) || 2, channels: [...new Set(Object.values(laPinValues()).filter(Boolean))] } } };
+  }
+  if (src === "can") return { source: "can", opts: { interface: $("#canIf").value, channel: $("#canCh").value.trim(), bitrate: +$("#canRate").value } };
+  if (!src) throw new Error("No serial port selected — plug in your adapter and press ↻");
+  return { source: "serial", config: currentConfig(src), link: $("#link").value };
+}
+
+/* ---------------- logic analyzer ---------------- */
+S.laDevices = []; S.laChannels = ["D0", "D1", "D2", "D3", "D4", "D5", "D6", "D7"];
+const LA_PINS = { uart: [["rx", "RX (TX of board)", true], ["tx", "2nd line", false]], i2c: [["scl", "SCL", true], ["sda", "SDA", true]],
+  spi: [["clk", "CLK", true], ["mosi", "MOSI", false], ["miso", "MISO", false], ["cs", "CS", false]] };
+function laPinValues() { const o = {}; $$("#laPins [data-pin]").forEach(e => o[e.dataset.pin] = e.value); return o; }
+function laSpec() {
+  const proto = $("#laProto").value, spec = { protocol: proto, ...laPinValues() };
+  for (const k of Object.keys(spec)) if (spec[k] === "") delete spec[k];
+  if (proto === "uart") spec.baudrate = parseInt($("#laBaud")?.value, 10) || 115200;
+  if (proto === "spi") { const m = +($("#laMode")?.value || 0); spec.cpol = m >> 1; spec.cpha = m & 1; }
+  return spec;
+}
+async function renderLaPins() {
+  const kind = sourceKind($("#source").value);
+  if (kind === "lafile" && $("#laFile").value) {
+    try { S.laChannels = (await api("sigrok/channels", { file: $("#laFile").value })).channels; } catch (e) { /* ignore */ }
+  } else if (kind === "ladev") {
+    const d = S.laDevices.find(d => d.driver === $("#laDevice").value);
+    if (d && d.channels.length) S.laChannels = d.channels;
+  }
+  const proto = $("#laProto").value, prev = laPinValues();
+  const opts = (req) => (req ? [] : [["", "—"]]).concat(S.laChannels.map(c => [c, c]));
+  $("#laPins").innerHTML = LA_PINS[proto].map(([k, label, req], i) => `<label>${esc(label)}<select data-pin="${k}">${opts(req).map(([v, l]) =>
+    `<option value="${esc(v)}">${esc(l)}</option>`).join("")}</select></label>`).join("") +
+    (proto === "uart" ? `<label>Baud<input id="laBaud" type="number" value="${esc(store("tl.laBaud") || 115200)}"></label>` : "") +
+    (proto === "spi" ? `<label>Mode<select id="laMode"><option>0</option><option>1</option><option>2</option><option>3</option></select></label>` : "");
+  // sensible defaults: guess by channel name, else D0, D1, ...
+  LA_PINS[proto].forEach(([k, , req], i) => {
+    const sel = $(`#laPins [data-pin="${k}"]`);
+    const byName = S.laChannels.find(c => c.toLowerCase() === k || (k === "rx" && c.toLowerCase() === "tx"));
+    const dflt = proto === "uart" && k === "tx" ? "" : S.laChannels[i] || "";  // SPI: CLK D0, MOSI D1, MISO D2, CS D3
+    sel.value = prev[k] && S.laChannels.includes(prev[k]) ? prev[k] : byName || dflt;
+  });
+  $("#laBaud")?.addEventListener("change", e => store("tl.laBaud", e.target.value));
+}
+async function laScan() {
+  await safe(async () => {
+    toast("Looking for logic analyzers…");
+    const r = await api("sigrok/scan", {});
+    S.laDevices = r.devices;
+    fillSelect($("#laDevice"), r.devices.length ? r.devices.map(d => [d.driver, `${d.description} (${d.driver})`]) : [["", "None found — plugged in? driver installed?"]]);
+    renderLaPins();
+  });
+}
+async function loadCaptures() {
+  try {
+    const r = await api("sigrok");
+    if (!r.available) toast("sigrok-cli is not installed — see 🔌 Wiring for how to install it", "err");
+    const keep = $("#laFile").value;
+    fillSelect($("#laFile"), r.captures.length ? r.captures.map(c => [c, c]) : [["", "No captures yet — Import…"]]);
+    if (keep && r.captures.includes(keep)) $("#laFile").value = keep;
+    renderLaPins();
+  } catch (e) { /* ignore */ }
+}
+async function laImport(e) {
+  const file = e.target.files[0]; if (!file) return;
+  await safe(async () => {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    let bin = ""; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+    const r = await api("sigrok/import", { name: file.name, data_b64: btoa(bin) });
+    await loadCaptures(); $("#laFile").value = r.file; renderLaPins();
+    toast(`Imported ${r.file}`, "ok");
+  });
+  e.target.value = "";
+}
+
+/* ---------------- CAN ---------------- */
+async function loadCan() {
+  if (S.canLoaded) return;
+  try {
+    const r = await api("can");
+    fillSelect($("#canIf"), r.interfaces, store("tl.canIf") || "slcan");
+    fillSelect($("#canRate"), r.bitrates.map(b => [b, b >= 1000 ? `${b / 1000} kbit/s` : b]), store("tl.canRate") || 500000);
+    $("#canCh").value = store("tl.canCh") || "";
+    $("#canIf").onchange = () => store("tl.canIf", $("#canIf").value);
+    $("#canRate").onchange = () => store("tl.canRate", $("#canRate").value);
+    $("#canCh").onchange = () => store("tl.canCh", $("#canCh").value);
+    if (!r.available) toast("python-can is not installed: run  pip install python-can", "err");
+    S.canLoaded = true;
+  } catch (e) { /* ignore */ }
+}
+
+/* ---------------- composer: targets, Pico, Modbus, replies ---------------- */
+function onTargetChange() {
+  const t = $("#target").value;
+  document.body.classList.toggle("target-source", t === "source");
+  $("#picoBox").classList.toggle("hidden", t === "source");
+  $("#picoI2cOpts").classList.toggle("hidden", t !== "pico-i2c");
+  $("#composeLabel").textContent = t === "pico-i2c" ? "Bytes to write (hex, may be empty for a pure read)" : t === "pico-spi" ? "Bytes to clock out on MOSI (hex)" : $("#composeLabel").textContent;
+}
+async function picoConnect() {
+  await safe(async () => {
+    store("tl.picoPort", $("#picoPort").value);
+    const r = await api("pico/connect", { port: $("#picoPort").value });
+    applyStatus(r.status); toast(`Pico bridge ready (${r.version})`, "ok");
+  });
+}
+async function picoScan() {
+  await safe(async () => {
+    const r = await api("pico/scan", {});
+    toast(r.addresses.length ? `I²C devices answering: ${r.addresses.map(a => "0x" + a).join(", ")}` : "No I²C device answered — check wiring and pull-ups");
+    if (r.addresses.length && !$("#picoAddr").value) $("#picoAddr").value = r.addresses[0];
+  });
+}
+async function picoSend(bus) {
+  await safe(async () => {
+    const r = await api("pico/send", { bus, addr: $("#picoAddr").value, hex: $("#composeHex").value, read_len: +$("#picoRead").value || 0 });
+    S.lastSent = $("#composeHex").value.trim() ? $("#composeHex").value : null;
+    toast(r.read ? `Sent · read back ${r.read}` : "Sent", "ok");
+    if (S.lastSent) { $("#verdictBox").classList.remove("hidden"); $("#verdictNote").value = ""; }
+  });
+}
+function onMbFn() {
+  const fn = +$("#mbFn").value;
+  $("#mbQtyLabel").textContent = fn === 5 ? "Value (1 = ON, 0 = OFF)" : fn === 6 ? "Value" : "How many";
+  $("#mbValsWrap").classList.toggle("hidden", !(fn === 15 || fn === 16));
+}
+async function mbBuild() {
+  await safe(async () => {
+    const fn = +$("#mbFn").value;
+    const values = (fn === 15 || fn === 16) ? $("#mbVals").value : undefined;
+    const qty = (fn === 15 || fn === 16) ? $("#mbVals").value.split(/[\s,]+/).filter(Boolean).length : +$("#mbQty").value;
+    const r = await api("modbus/build", { addr: +$("#mbAddr").value, fn, start: +$("#mbStart").value, qty, values });
+    $("#composeHex").value = r.hex; $("#mbSummary").textContent = r.summary;
+    $("#autoFix").checked = false;  // the CRC is already right
+    $("#waitReply").checked = true;
+  });
+}
+function showReplies(replies) {
+  const box = $("#replyBox");
+  if (!replies) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  box.innerHTML = `<div class="card replies"><div class="card-title">${replies.length ? `Reply${replies.length > 1 ? "s" : ""} received` : "No reply"}</div>
+    ${replies.length ? replies.slice(0, 20).map(f => `<div class="result"><span><span class="chan ${chanClass(f.channel)}">${esc(chanLabel(f.channel))}</span>
+      <span class="mono small">${esc(f.hex)}</span></span><span class="score">${f.modbus ? esc(f.modbus.summary) : ""}</span></div>`).join("")
+      : `<p class="muted small">Nothing arrived in time. Check wiring (TX → RX, GND), the device address, and the baud rate.</p>`}</div>`;
+}
+
+/* ---------------- wiring guides ---------------- */
+const GUIDES = {
+  ttl: ["TTL UART (USB-to-TTL adapter)", `<div class="warn">Set the adapter's jumper to the board's voltage (3.3 V or 5 V).</div>
+<b>Listen</b> (Sniff mode):<pre>Controller TX ──┬──────► Display RX
+                └──────► Adapter RX
+Controller GND ────────► Adapter GND
+Adapter TX: not connected</pre>
+<b>Send</b> (Send mode): unplug Controller TX from the display, then<pre>Adapter TX ───► Display RX
+Adapter GND ──► Display GND</pre>`],
+  rs232: ["RS-232 (DB9, ±12 V)", `<div class="warn">RS-232 uses ±12 V. Use a USB-to-RS232 adapter — never a TTL adapter.</div>
+<b>Listen</b>: the adapter's <b>RX (DB9 pin 2)</b> and <b>GND (pin 5)</b> to the line you want to hear (e.g. the controller's TX, DB9 pin 3). A "Y" or breakout cable makes this easy.
+<pre>DB9: 2 = RX   3 = TX   5 = GND</pre>
+<b>Send</b>: replace the controller: adapter <b>TX (pin 3)</b> → display RX, GND ↔ GND.`],
+  rs485: ["RS-485 (A/B twisted pair)", `<div class="warn">Use a USB-to-RS485 adapter. RS-485 is one shared pair, so one adapter hears both sides — Tapline labels master → slave and slave → master.</div>
+<b>Listen</b>:<pre>Bus A (D+) ───► Adapter A (D+)
+Bus B (D−) ───► Adapter B (D−)
+Bus GND    ───► Adapter GND (recommended)</pre>
+Nothing decoded? Swap A and B — vendors label them differently. Don't add a 120 Ω terminator unless your adapter is at the end of the bus.
+<b>Send</b>: with the same wiring Tapline becomes another master. Make sure the real master is quiet (unplugged or stopped), or messages will collide.`],
+  la: ["Logic analyzer (sigrok / PulseView compatible)", `<b>Install sigrok-cli</b> once: Windows/macOS — download from <b>sigrok.org/wiki/Downloads</b>; Linux — <code>sudo apt install sigrok-cli</code>. Cheap "24 MHz 8-channel" analyzers use the <b>fx2lafw</b> driver (Windows needs the Zadig WinUSB driver).
+<pre>Analyzer GND ──► board GND   (always!)
+UART: D0 ──► the TX line you want to read
+I²C:  D0 ──► SCL   D1 ──► SDA
+SPI:  D0 ──► CLK   D1 ──► MOSI   D2 ──► MISO   D3 ──► CS</pre>
+Sample at least 4× the bus speed (UART 115200 → 1 MHz; I²C 400 kHz → 4 MHz; SPI 2 MHz → 8–12 MHz). The analyzer only listens. To send on I²C/SPI, use the Pico bridge.`],
+  can: ["CAN bus adapter", `<b>Install</b>: <code>pip install python-can</code> (done by run.bat / run.sh). Pick your adapter type in <b>Interface</b>:
+<pre>CANable (slcan): channel = COM6 or /dev/ttyACM0
+candleLight / CANable (gs_usb firmware): channel = 0
+PEAK PCAN-USB: channel = PCAN_USBBUS1
+Linux SocketCAN: channel = can0</pre>
+<pre>Adapter CAN_H ──► bus CAN_H
+Adapter CAN_L ──► bus CAN_L
+Adapter GND   ──► bus GND</pre>
+Bitrate must match the bus (cars: usually 500 kbit/s). Add a 120 Ω terminator only if your adapter is at an end of the bus. Note: a CAN adapter acknowledges messages like any node — fine for sniffing; for strictly passive listening use an adapter with listen-only mode.`],
+  pico: ["Raspberry Pi Pico bridge (send I²C / SPI)", `1. Install MicroPython on the Pico (hold BOOTSEL, plug in, copy the .uf2 from micropython.org).
+2. Open <b>bridge/pico_bridge.py</b> (in the Tapline folder) in <b>Thonny</b> and save it to the Pico as <b>main.py</b>. Unplug and replug.
+3. In Composer choose <b>Pico bridge</b>, pick its port and press Connect.
+<pre>I²C0: SDA = GP4 (pin 6)   SCL = GP5 (pin 7)
+SPI0: SCK = GP18 (pin 24) MOSI = GP19 (pin 25)
+      MISO = GP16 (pin 21) CS = GP17 (pin 22)
+GND:  pin 3 (or any GND) ──► target GND</pre>
+<div class="warn">Pico pins are 3.3 V only. Disconnect the original controller from the bus while the Pico drives it.</div>`],
+};
+function wiringGuide(key) {
+  const src = $("#source").value, kind = sourceKind(src);
+  key = key || (kind === "can" || src === "sim-can" ? "can" : kind.startsWith("la") || src.startsWith("sim-la") ? "la" :
+    src === "sim-modbus" ? "rs485" : kind === "serial" ? $("#link").value : "ttl");
+  const [title, html] = GUIDES[key];
+  openModal(`<div class="guide"><h3>${title}</h3>${html}</div>
+    <div class="actions wrap">${Object.keys(GUIDES).map(k => `<button class="ghost tiny" data-g="${k}">${GUIDES[k][0].split(" (")[0]}</button>`).join("")}<button class="primary" data-close>Got it</button></div>`);
+  $$("#modalCard [data-g]").forEach(b => b.onclick = () => wiringGuide(b.dataset.g));
+}
+
 async function init() {
   bind();
+  onTargetChange(); onMbFn();
   try {
     S.options = await api("options");
     setupSettings();

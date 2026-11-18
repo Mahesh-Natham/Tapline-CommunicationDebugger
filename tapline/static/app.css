@@ -90,7 +90,19 @@ body.send-mode #topbar { border-top-color: var(--amber); }
 .group { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
 .group.right { margin-left: auto; align-items: center; }
 #source { min-width: 210px; max-width: 320px; }
-body.is-sim .serial-only { opacity: .45; pointer-events: none; }
+[class*="only-"] { display: none !important; }
+body.kind-serial .only-serial, body.kind-ladev .only-ladev, body.kind-lafile .only-lafile,
+body.kind-ladev .only-la, body.kind-lafile .only-la, body.kind-can .only-can,
+body.kind-serial .only-detect, body.src-simulator .only-detect, body.target-source .only-sourcetarget { display: flex !important; }
+button.only-detect, button.only-serial { display: none; }
+body.kind-serial button.only-detect, body.src-simulator button.only-detect, body.kind-serial button.only-serial { display: inline-flex !important; }
+#laPins label { display: inline-flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 3px; }
+#laPins select, #laPins input { width: 84px; }
+.mb { font-size: 12px; color: #0f5d3a; background: var(--mint-weak); padding: 1px 8px; border-radius: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+.chan.oth { background: #eef0f4; color: #4b5563; }
+.guide pre { background: #f8f9fc; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font: 12px/1.5 var(--mono); overflow-x: auto; }
+.guide .warn { background: var(--red-weak); color: #8f2226; border-radius: 10px; padding: 8px 12px; margin: 8px 0; font-size: 13px; }
+.replies .result { cursor: default; }
 .seg { display: inline-flex; background: var(--bg); border: 1px solid var(--line-strong); border-radius: 10px; padding: 3px; }
 .seg button { border: 0; background: transparent; padding: 5px 14px; border-radius: 7px; color: var(--muted); }
 .seg button.on { background: #fff; color: var(--ink); box-shadow: var(--shadow); }
@@ -119,7 +131,7 @@ body.send-mode .seg button[data-mode=send].on { background: var(--amber-weak); c
 #loadOlder { margin: 4px auto 6px; display: block; }
 
 .frow {
-  display: grid; grid-template-columns: 96px 78px minmax(0, 1fr); align-items: center; gap: 10px;
+  display: grid; grid-template-columns: 96px 112px minmax(0, 1fr); align-items: center; gap: 10px;
   padding: 4px 14px; border-left: 3px solid transparent; cursor: pointer; font-size: 13px;
 }
 .frow:hover { background: #f8f9ff; }

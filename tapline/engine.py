@@ -161,7 +161,10 @@ class Engine:
             self._writer = self.project.new_session(meta)
             self.session_name = self._writer.name
         for i, s in enumerate(sources):
-            self._tasks.append(asyncio.create_task(self._pump(s), name=f"pump{i}"))
+            task = asyncio.create_task(self._pump(s), name=f"pump{i}")
+            # report the new state once the task has really finished (so "running" is accurate)
+            task.add_done_callback(lambda _t: self._emit({"type": "status", "status": self.status()}))
+            self._tasks.append(task)
         self._tasks.append(asyncio.create_task(self._ticker(), name="ticker"))
         self._emit({"type": "status", "status": self.status()})
 
@@ -216,7 +219,6 @@ class Engine:
         if src.error:
             self.error = src.error
             self._emit({"type": "error", "message": src.error})
-        self._emit({"type": "status", "status": self.status()})
 
     async def _ticker(self):
         while True:

@@ -22,18 +22,38 @@
         <button class="icon" id="refreshPorts" title="Refresh port list" aria-label="Refresh port list">↻</button>
       </div>
     </label>
-    <label class="field serial-only"><span>Baud</span>
+    <label class="field only-serial"><span>Link</span>
+      <select id="link"><option value="ttl">TTL UART (3.3/5 V)</option><option value="rs232">RS-232 (±12 V)</option><option value="rs485">RS-485 (A/B pair)</option></select>
+    </label>
+    <label class="field only-serial"><span>Baud</span>
       <div class="row-inline">
         <select id="baud"></select>
         <input id="baudCustom" class="hidden narrow" type="number" min="50" max="12000000" placeholder="custom">
       </div>
     </label>
-    <label class="field serial-only"><span>Data</span><select id="bytesize"></select></label>
-    <label class="field serial-only"><span>Parity</span><select id="parity"></select></label>
-    <label class="field serial-only"><span>Stop</span><select id="stopbits"></select></label>
-    <button class="ghost" id="detectBtn" title="Listen and guess baud rate and format (never transmits)">✨ Detect</button>
-    <button class="ghost tiny serial-only" id="secondBtn" title="Listen to the display's replies on a second adapter">+ 2nd adapter</button>
-    <label class="field hidden" id="secondWrap"><span>Display → controller</span><select id="source2"></select></label>
+    <label class="field only-serial"><span>Data</span><select id="bytesize"></select></label>
+    <label class="field only-serial"><span>Parity</span><select id="parity"></select></label>
+    <label class="field only-serial"><span>Stop</span><select id="stopbits"></select></label>
+    <button class="ghost only-detect" id="detectBtn" title="Listen and guess baud rate and format (never transmits)">✨ Detect</button>
+    <button class="ghost tiny only-serial" id="secondBtn" title="Listen to the other direction on a second adapter">+ 2nd adapter</button>
+    <label class="field hidden" id="secondWrap"><span>Other direction</span><select id="source2"></select></label>
+
+    <label class="field only-ladev"><span>Analyzer</span>
+      <div class="row-inline"><select id="laDevice"><option value="">Press Scan…</option></select><button class="ghost tiny" id="laScan">Scan</button></div>
+    </label>
+    <label class="field only-ladev"><span>Sample rate</span><select id="laRate">
+      <option>1 MHz</option><option>2 MHz</option><option selected>4 MHz</option><option>8 MHz</option><option>12 MHz</option><option>16 MHz</option><option>24 MHz</option></select></label>
+    <label class="field only-ladev"><span>Seconds</span><input id="laSeconds" type="number" class="narrow" value="2" min="0.1" max="60" step="0.1"></label>
+    <label class="field only-lafile"><span>Capture file (.sr)</span>
+      <div class="row-inline"><select id="laFile"></select><label class="btn ghost tiny">Import…<input id="laImport" type="file" accept=".sr" class="hidden"></label></div>
+    </label>
+    <label class="field only-la"><span>Protocol</span><select id="laProto"><option value="uart">UART</option><option value="i2c">I²C</option><option value="spi">SPI</option></select></label>
+    <span class="row-inline only-la" id="laPins"></span>
+
+    <label class="field only-can"><span>Interface</span><select id="canIf"></select></label>
+    <label class="field only-can"><span>Channel</span><input id="canCh" placeholder="COM6 · can0 · PCAN_USBBUS1" style="width:170px"></label>
+    <label class="field only-can"><span>Bitrate</span><select id="canRate"></select></label>
+    <button class="ghost tiny" id="wiringBtn" title="How to connect this kind of link">🔌 Wiring</button>
   </div>
 
   <div class="group right">
@@ -52,6 +72,8 @@
       <option value="delimiter">Start / end bytes</option>
       <option value="length">Header + length byte</option>
       <option value="fixed">Fixed length</option>
+      <option value="modbus">Modbus RTU (CRC)</option>
+      <option value="native">As delivered (I²C/SPI/CAN)</option>
     </select></label>
     <span id="frameParams" class="row-inline"></span>
     <button class="ghost tiny" id="applyFraming">Apply</button>
@@ -107,6 +129,7 @@
             <label class="field"><span>Scale</span><input id="ffScale" type="number" step="any" value="1"></label>
             <label class="field"><span>Unit</span><input id="ffUnit" placeholder="°C, %, rpm…"></label>
           </div>
+          <label class="toggle hidden" id="ffChanWrap" style="margin-top:8px"><input type="checkbox" id="ffChan"> Only messages on <b id="ffChanName"></b></label>
           <div class="preview muted" id="ffPreview"></div>
           <div class="actions"><button type="button" class="ghost" id="ffCancel">Cancel</button><button class="primary">Save field</button></div>
         </form>
@@ -179,10 +202,38 @@
         <p>To test a guess, switch to <strong>Send</strong> mode at the top right.</p>
       </div>
       <div id="composeBox">
-        <label class="field"><span>Message (hex)</span>
+        <label class="field"><span>Send through</span>
+          <select id="target"><option value="source">The current source</option><option value="pico-i2c">Pico bridge — I²C</option><option value="pico-spi">Pico bridge — SPI</option></select>
+        </label>
+        <div id="picoBox" class="card hidden">
+          <div class="card-title">Raspberry Pi Pico bridge <span class="muted small" id="picoState">not connected</span></div>
+          <div class="row-inline"><select id="picoPort"></select><button class="ghost tiny" id="picoConnect">Connect</button><button class="ghost tiny" id="picoScan">Scan I²C</button></div>
+          <div class="row-inline" style="margin-top:8px" id="picoI2cOpts">
+            <label class="field inline"><span>Address</span><input id="picoAddr" class="mono narrow" placeholder="3C"></label>
+            <label class="field inline"><span>then read</span><input id="picoRead" type="number" class="narrow" value="0" min="0" max="256"> bytes</label>
+          </div>
+          <p class="muted small" style="margin:8px 0 0">First time? Copy <b>bridge/pico_bridge.py</b> to the Pico as <b>main.py</b>. <button type="button" class="ghost tiny" id="picoGuide">🔌 Pico setup &amp; pins</button></p>
+        </div>
+        <div id="modbusBox" class="card hidden">
+          <div class="card-title">Modbus request builder</div>
+          <div class="grid2">
+            <label class="field"><span>Device address</span><input id="mbAddr" type="number" value="1" min="1" max="247"></label>
+            <label class="field"><span>Function</span><select id="mbFn">
+              <option value="3">03 Read holding registers</option><option value="4">04 Read input registers</option>
+              <option value="1">01 Read coils</option><option value="2">02 Read discrete inputs</option>
+              <option value="6">06 Write single register</option><option value="5">05 Write single coil</option>
+              <option value="16">16 Write multiple registers</option><option value="15">15 Write multiple coils</option></select></label>
+            <label class="field"><span>Start address</span><input id="mbStart" type="number" value="0" min="0" max="65535"></label>
+            <label class="field"><span id="mbQtyLabel">How many</span><input id="mbQty" type="number" value="10" min="0"></label>
+            <label class="field hidden" id="mbValsWrap" style="grid-column:1/-1"><span>Values (comma separated)</span><input id="mbVals" placeholder="10, 20, 30"></label>
+          </div>
+          <div class="actions"><span class="muted small" id="mbSummary"></span><button class="ghost tiny" id="mbBuild">Build message</button></div>
+        </div>
+        <label class="field"><span id="composeLabel">Message (hex)</span>
           <textarea id="composeHex" class="mono" rows="3" spellcheck="false" placeholder="5A A5 03 30 32 65"></textarea>
         </label>
-        <label class="toggle"><input type="checkbox" id="autoFix" checked> Fix length byte &amp; checksum automatically</label>
+        <label class="toggle only-sourcetarget"><input type="checkbox" id="autoFix" checked> Fix length byte &amp; checksum automatically</label>
+        <label class="toggle only-sourcetarget"><input type="checkbox" id="waitReply"> Wait <input id="waitMs" type="number" class="narrow" value="300" min="20" max="5000" style="width:70px"> ms and show the reply</label>
         <div id="composeFields"></div>
         <div class="actions wrap">
           <button class="primary" id="sendBtn">Send</button>
@@ -190,6 +241,7 @@
           <button class="ghost" id="stopSend">Stop</button>
           <button class="ghost" id="replaySel" title="Re-send the selected message and the ones after it, with original timing">Replay from selected</button>
         </div>
+        <div id="replyBox" class="hidden"></div>
         <div id="verdictBox" class="card hidden">
           <div class="card-title">Did the display do what you expected?</div>
           <input id="verdictNote" placeholder="What happened? (optional)">

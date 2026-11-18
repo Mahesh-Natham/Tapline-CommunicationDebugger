@@ -220,3 +220,14 @@ async def test_can_demo_and_send(engine):
     assert any(f.channel == "CAN 0x301" for f in replies)
     assert any(f.channel == "sent CAN 0x300" for f in engine.frames)
     await engine.stop()
+
+
+@needs_sigrok
+async def test_finished_capture_reports_not_running(engine):
+    q = engine.subscribe()
+    await engine.start("sim-la", opts={"protocol": "i2c"})
+    await wait_for(lambda: not engine.running, timeout=10)
+    await asyncio.sleep(0.05)
+    statuses = [e["status"] for e in iter_q(q) if e["type"] == "status"]
+    assert statuses[-1]["running"] is False
+    await engine.stop()

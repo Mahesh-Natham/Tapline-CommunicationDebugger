@@ -40,7 +40,7 @@ def page(server):
             b = p.chromium.launch(executable_path=exe, args=["--no-sandbox"])
         pg = b.new_page(viewport={"width": 1400, "height": 900})
         errors = []
-        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.on("pageerror", lambda e: errors.append(str(e) + " @ " + (e.stack or "")[:300]))
         pg.on("response", lambda r: errors.append(f"HTTP {r.status} {r.request.method} {r.url}") if r.status >= 400 else None)
         pg.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
         pg.goto(server)
@@ -169,4 +169,96 @@ def test_failed_start_keeps_captured_messages(page):
     assert "not found" in pg.inner_text("#toasts")
     assert pg.locator(".frow").count() == n
     errors[:] = [e for e in errors if "400" not in e]  # the expected failed start
+    assert not errors, errors
+
+
+def _start(pg, source):
+    if "running" in (pg.get_attribute("#startBtn", "class") or ""):
+        pg.click("#startBtn")
+        pg.wait_for_selector("#startBtn:not(.running)")
+    pg.select_option("#source", source)
+    pg.click("#startBtn")
+
+
+def _send_mode(pg):
+    pg.click('#modeSeg [data-mode="send"]')
+    if pg.is_visible("#ckOk"):
+        for cb in pg.query_selector_all("#modalCard input[type=checkbox]"):
+            cb.check()
+        pg.click("#ckOk")
+    pg.wait_for_selector("body.send-mode")
+
+
+def test_modbus_demo_builder_and_reply(page):
+    pg, errors = page
+    _fresh(pg)
+    _start(pg, "sim-modbus")
+    pg.wait_for_selector(".frow .mb")
+    assert "Read holding registers" in pg.inner_text(".frow .mb")
+    assert pg.locator(".chan.d2c").count() >= 1  # slave → master
+    pg.click(".frow:nth-child(2)")
+    pg.wait_for_selector("#decoded .card")
+    _send_mode(pg)
+    pg.click('.tabs [data-tab="compose"]')
+    assert pg.is_visible("#modbusBox")
+    pg.select_option("#mbFn", "6")
+    pg.fill("#mbStart", "2")
+    pg.fill("#mbQty", "250")
+    pg.click("#mbBuild")
+    pg.wait_for_function("document.querySelector('#composeHex').value.startsWith('01 06 00 02 00 FA')")
+    pg.click("#sendBtn")
+    pg.wait_for_selector("#replyBox .result")
+    assert "Write single register" in pg.inner_text("#replyBox") or "write single register" in pg.inner_text("#replyBox")
+    pg.click("#startBtn")
+    assert not errors, errors
+
+
+def test_logic_analyzer_and_can_demos_and_guides(page):
+    pg, errors = page
+    _fresh(pg)
+    import shutil
+    if shutil.which("sigrok-cli"):
+        _start(pg, "sim-la:i2c")
+        pg.wait_for_selector(".frow")
+        pg.wait_for_function("[...document.querySelectorAll('.chan')].some(e => e.textContent.includes('I²C 0x48 read'))")
+    pg.select_option("#source", "la-file")
+    assert pg.is_visible("#laProto")
+    pg.select_option("#laProto", "spi")
+    pg.wait_for_function("document.querySelectorAll('#laPins select').length === 5")  # CLK MOSI MISO CS + mode
+    _start(pg, "sim-can")
+    pg.wait_for_function("[...document.querySelectorAll('.chan')].some(e => e.textContent.includes('CAN 0x100'))")
+    _send_mode(pg)
+    pg.click('.tabs [data-tab="compose"]')
+    pg.check("#waitReply")
+    pg.fill("#composeHex", "300#07")
+    pg.click("#sendBtn")
+    pg.wait_for_selector("#replyBox .result")
+    assert "CAN 0x301" in pg.inner_text("#replyBox")
+    # name a CAN field scoped to its ID
+    pg.click('#modeSeg [data-mode="sniff"]')
+    pg.click("#startBtn")
+    pg.wait_for_selector("#startBtn:not(.running)")
+    row = pg.locator(".frow", has=pg.locator(".chan", has_text="CAN 0x100")).first
+    row.click()
+    pg.wait_for_selector("#cells .cell")
+    pg.click('#cells .cell[data-i="0"]')
+    pg.click('#cells .cell[data-i="1"]', modifiers=["Shift"])
+    pg.click("#mkField")
+    assert pg.is_checked("#ffChan")
+    pg.select_option("#ffKind", "u16be")
+    pg.fill("#ffName", "rpm")
+    pg.click("#fieldForm button.primary")
+    pg.wait_for_selector(".tname")
+    # Pico target + wiring guides
+    pg.click('.tabs [data-tab="compose"]')
+    pg.select_option("#target", "pico-i2c")
+    assert pg.is_visible("#picoBox") and pg.is_visible("#picoAddr")
+    pg.select_option("#source", "sim-modbus")
+    pg.click("#wiringBtn")
+    assert "RS-485" in pg.inner_text("#modalCard h3")
+    pg.click('#modalCard [data-g="pico"]')
+    assert "GP4" in pg.inner_text("#modalCard")
+    pg.click("#modalCard [data-close]")
+    pg.set_viewport_size({"width": 390, "height": 844})
+    assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
     assert not errors, errors
