@@ -122,3 +122,51 @@ def test_ui_flow(page, server):
     assert pg.evaluate("document.documentElement.scrollWidth <= window.innerWidth + 1")
     pg.click("#startBtn")
     assert not errors, errors
+
+
+def _fresh(pg):
+    pg.wait_for_selector("#tour:not(.hidden)")
+    pg.click("#tourSkip")
+
+
+def test_load_older_shows_older_rows(page):
+    pg, errors = page
+    _fresh(pg)
+    pg.evaluate("""() => {
+      const t = Date.now() / 1000;
+      S.frames = Array.from({length: 3000}, (_, i) => ({id: i, t_start: t + i, t_end: t + i, channel: "ctrl→disp", hex: "01 02", flags: [], type: null}));
+      S.byId = new Map(S.frames.map(f => [f.id, f])); S.oldestLoaded = 0; renderAll();
+    }""")
+    first = lambda: int(pg.get_attribute("#rows .frow", "data-id"))
+    assert first() == 1000
+    pg.click("#loadOlder")
+    assert first() == 0
+    assert pg.is_visible("#follow") and not pg.is_checked("#follow")
+    pg.check("#follow")  # back to live: newest rows again
+    assert first() == 1000
+    assert not errors, errors
+
+
+def test_failed_start_keeps_captured_messages(page):
+    pg, errors = page
+    _fresh(pg)
+    pg.select_option("#source", "simulator")
+    if "running" in (pg.get_attribute("#startBtn", "class") or ""):
+        pg.click("#startBtn")
+        pg.wait_for_selector("#startBtn:not(.running)")
+    pg.click("#startBtn")
+    pg.wait_for_selector("#startBtn.running")
+    pg.wait_for_function("document.querySelectorAll('.frow').length >= 2")
+    pg.click("#startBtn")
+    pg.wait_for_selector("#startBtn:not(.running)")
+    pg.wait_for_timeout(300)
+    n = pg.locator(".frow").count()
+    assert n >= 2
+    pg.evaluate("""() => { const o = new Option('/dev/missing-adapter', '/dev/missing-adapter'); document.querySelector('#source').add(o); }""")
+    pg.select_option("#source", "/dev/missing-adapter")
+    pg.click("#startBtn")
+    pg.wait_for_selector(".toast.err")
+    assert "not found" in pg.inner_text("#toasts")
+    assert pg.locator(".frow").count() == n
+    errors[:] = [e for e in errors if "400" not in e]  # the expected failed start
+    assert not errors, errors

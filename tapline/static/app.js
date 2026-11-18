@@ -10,6 +10,7 @@ const S = {
   options: null, ports: [], status: {}, protocol: { frame_types: [] },
   frames: [], byId: new Map(), markers: [], selected: null, hlOffset: null,
   selRange: null, hitCells: null, lastSent: null, follow: true, oldestLoaded: null,
+  windowEnd: null, // null = show the newest messages; else id of the last row shown
 };
 
 /* ---------------- helpers ---------------- */
@@ -111,9 +112,10 @@ async function toggleStart() {
   await safe(async () => {
     const body = src === "simulator" ? { source: "simulator" } : { source: "serial", config: currentConfig(src) };
     if (src !== "simulator" && $("#source2").value && !$("#secondWrap").classList.contains("hidden")) body.config2 = currentConfig($("#source2").value);
-    S.frames = []; S.byId.clear(); S.markers = []; S.selected = null;
-    renderAll();
-    applyStatus(await api("start", body));
+    const st = await api("start", body);  // throws on failure: keep what's on screen
+    S.frames = []; S.byId.clear(); S.markers = []; S.selected = null; S.windowEnd = null; S.oldestLoaded = null;
+    renderAll(); clearInspect();
+    applyStatus(st);
     toast(src === "simulator" ? "Demo running — watch the messages arrive" : `Listening on ${src}`, "ok");
   });
 }
@@ -199,8 +201,15 @@ function passesFilter(f) {
   if (!q) return true;
   return f.hex.toLowerCase().includes(q.replace(/0x/g, "")) || (f.type || "").toLowerCase().includes(q) || f.channel.toLowerCase().includes(q) || chanLabel(f.channel).includes(q);
 }
+function viewRange(list) {
+  let end = list.length;
+  if (S.windowEnd !== null) { const i = list.findIndex(f => f.id > S.windowEnd); if (i >= 0) end = i; }
+  return [Math.max(0, end - MAX_ROWS), end];
+}
 function renderAll() {
-  const list = S.frames.filter(passesFilter).slice(-MAX_ROWS);
+  const all = S.frames.filter(passesFilter);
+  const [start, end] = viewRange(all);
+  const list = all.slice(start, end);
   const markers = S.markers.map((m, i) => ({ m, i })).sort((a, b) => a.m.t - b.m.t);
   let html = "", mi = 0;
   for (const f of list) {
@@ -211,7 +220,7 @@ function renderAll() {
   for (; mi < markers.length; mi++) if (markers[mi].m.t >= firstT) html += markerRow(markers[mi].m, markers[mi].i);
   $("#rows").innerHTML = html;
   $("#empty").classList.toggle("hidden", S.frames.length > 0 || S.markers.length > 0);
-  $("#loadOlder").classList.toggle("hidden", !(S.oldestLoaded > 0));
+  $("#loadOlder").classList.toggle("hidden", !(start > 0 || S.oldestLoaded > 0));
   if (S.follow) scrollBottom();
 }
 function appendFrames(items) {
@@ -227,15 +236,17 @@ function appendFrames(items) {
     drop.forEach(f => S.byId.delete(f.id));
     S.oldestLoaded = S.frames[0].id;
   }
+  if (S.windowEnd !== null) return;  // browsing older messages: keep the view still
   if (html) rows.insertAdjacentHTML("beforeend", html);
   while (rows.children.length > MAX_ROWS) rows.firstElementChild.remove();
+  if (rows.querySelector(".frow")?.dataset.id > 0) $("#loadOlder").classList.remove("hidden");
   $("#empty").classList.toggle("hidden", S.frames.length > 0);
   if (S.follow) scrollBottom();
 }
 function scrollBottom() { const el = $("#frames"); el.scrollTop = el.scrollHeight; }
 async function reloadFrames() {
   const r = await api(`frames?limit=${MAX_ROWS}`);
-  S.frames = r.items; S.byId = new Map(r.items.map(f => [f.id, f]));
+  S.frames = r.items; S.byId = new Map(r.items.map(f => [f.id, f])); S.windowEnd = null;
   S.oldestLoaded = r.items.length ? r.items[0].id : null;
   const m = await api("markers");
   S.markers = m.markers;
@@ -244,10 +255,16 @@ async function reloadFrames() {
 }
 async function loadOlder() {
   await safe(async () => {
-    const r = await api(`frames?before=${S.frames[0].id}&limit=1000`);
-    S.frames = r.items.concat(S.frames);
-    r.items.forEach(f => S.byId.set(f.id, f));
-    S.oldestLoaded = r.items.length ? r.items[0].id : 0;
+    let [start, end] = viewRange(S.frames);
+    if (start < 1000 && S.oldestLoaded > 0) {  // fetch more history from the server first
+      const r = await api(`frames?before=${S.frames[0].id}&limit=1000`);
+      S.frames = r.items.concat(S.frames);
+      r.items.forEach(f => S.byId.set(f.id, f));
+      S.oldestLoaded = r.items.length ? r.items[0].id : 0;
+      [start, end] = viewRange(S.frames);
+    }
+    const newEnd = Math.max(Math.min(MAX_ROWS, S.frames.length), end - 1000);
+    S.windowEnd = S.frames[newEnd - 1].id;
     S.follow = false; $("#follow").checked = false;
     renderAll();
     $("#frames").scrollTop = 0;
@@ -731,11 +748,14 @@ function bind() {
   $("#applyFraming").onclick = () => applyFraming();
   $("#guessFraming").onclick = guessFraming;
   $("#filter").oninput = renderAll;
-  $("#follow").onchange = e => { S.follow = e.target.checked; if (S.follow) scrollBottom(); };
+  $("#follow").onchange = e => {
+    S.follow = e.target.checked;
+    if (S.follow) { if (S.windowEnd !== null) { S.windowEnd = null; renderAll(); } scrollBottom(); }
+  };
   $("#frames").addEventListener("scroll", () => {
     const el = $("#frames"); const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     if (!atBottom && S.follow && el.dataset.user) { S.follow = false; $("#follow").checked = false; }
-    if (atBottom && !S.follow) { S.follow = true; $("#follow").checked = true; }
+    if (atBottom && !S.follow && S.windowEnd === null) { S.follow = true; $("#follow").checked = true; }
   });
   $("#frames").addEventListener("wheel", () => $("#frames").dataset.user = "1", { passive: true });
   $("#frames").addEventListener("touchmove", () => $("#frames").dataset.user = "1", { passive: true });
