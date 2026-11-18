@@ -114,3 +114,42 @@ async def test_gap_rule_flushes_idle_frame(engine):
     await engine.start("simulator", speed=1)
     await wait_for(lambda: len(engine.frames) >= 1, timeout=2)  # first frame emitted after idle, not next chunk
     await engine.stop()
+
+
+class BrokenWriteSource:
+    """A source whose port disappears when we try to send."""
+    name = "broken"
+    error = None
+
+    async def start(self):
+        import asyncio as _a
+        self._q = _a.Queue()
+
+    async def stop(self):
+        await self._q.put(None)
+
+    async def chunks(self):
+        while True:
+            c = await self._q.get()
+            if c is None:
+                return
+            yield c
+
+    async def write(self, data):
+        from tapline.sources.base import SourceError
+        raise SourceError("COM5 was disconnected.")
+
+
+async def test_repeat_failure_is_reported(engine, monkeypatch):
+    import tapline.engine as E
+    monkeypatch.setattr(E, "SimulatorSource", lambda speed=1.0: BrokenWriteSource())
+    q = engine.subscribe()
+    await engine.start("simulator")
+    engine.set_mode("send")
+    await engine.send("01 02", repeat_ms=20)
+    await asyncio.sleep(0.15)
+    assert engine.status()["repeating"] is False
+    events = list(iter_q(q))
+    assert any(e["type"] == "error" and "disconnected" in e["message"] for e in events)
+    await engine.stop()
+

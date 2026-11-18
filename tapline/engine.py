@@ -242,7 +242,7 @@ class Engine:
                     await self._write(data)
                     n += 1
                     await asyncio.sleep(interval)
-            self._repeat = asyncio.create_task(loop())
+            self._repeat = asyncio.create_task(self._guard(loop()))
             self._emit({"type": "status", "status": self.status()})
         else:
             for _ in range(max(1, int(count))):
@@ -265,8 +265,22 @@ class Engine:
                 await self._write(f.data)
                 prev = f.t_start
             self._emit({"type": "status", "status": self.status()})
-        self._repeat = asyncio.create_task(run())
+        self._repeat = asyncio.create_task(self._guard(run()))
         return len(frames)
+
+    async def _guard(self, coro):
+        """Run a background send loop; if it fails, tell the user instead of dying silently."""
+        try:
+            await coro
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001 - any failure must reach the UI
+            self.error = str(e)
+            self._emit({"type": "error", "message": f"Sending stopped: {e}"})
+        finally:
+            if self._repeat is asyncio.current_task():
+                self._repeat = None
+            self._emit({"type": "status", "status": self.status()})
 
     def stop_repeat(self) -> None:
         if self._repeat and not self._repeat.done():

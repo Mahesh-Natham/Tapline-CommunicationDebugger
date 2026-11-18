@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import os
 import threading
 import time
 from typing import AsyncIterator
@@ -31,7 +32,7 @@ def friendly_error(exc: BaseException, port: str) -> str:
     msg = str(exc)
     low = msg.lower()
     code = getattr(exc, "errno", None)
-    if "access is denied" in low or "busy" in low or code == errno.EBUSY or "resource temporarily" in low:
+    if "access is denied" in low or "exclusively lock" in low or "busy" in low or code == errno.EBUSY or "resource temporarily" in low:
         return f"{port} is in use by another program. Close other serial monitors (Arduino IDE, PuTTY…) and try again."
     if code == errno.EACCES or "permission denied" in low:
         return (f"Permission denied for {port}. On Linux add yourself to the dialout group "
@@ -44,10 +45,11 @@ def friendly_error(exc: BaseException, port: str) -> str:
 
 
 def _open(cfg: SerialConfig, timeout: float = 0.02) -> serial.Serial:
+    extra = {"exclusive": True} if os.name == "posix" else {}  # Windows locks ports by itself
     try:
         return serial.Serial(cfg.port, cfg.baud, bytesize=cfg.bytesize, parity=_PARITY[cfg.parity],
                              stopbits=_STOP.get(float(cfg.stopbits), serial.STOPBITS_ONE),
-                             timeout=timeout, write_timeout=2)
+                             timeout=timeout, write_timeout=2, **extra)
     except (serial.SerialException, OSError, ValueError) as e:
         raise SourceError(friendly_error(e, cfg.port)) from e
 

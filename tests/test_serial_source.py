@@ -86,3 +86,19 @@ async def test_read_window_collects(pty_pair):
     await task
     other.close()
     assert len(data) >= 40 and errors == 0
+
+
+async def test_port_in_use_is_reported(pty_pair):
+    a, b, _ = pty_pair
+    first = SerialSource(SerialConfig(a, 115200))
+    await first.start()
+    second = SerialSource(SerialConfig(a, 115200))
+    with pytest.raises(SourceError) as e:
+        await second.start()
+    assert "in use" in str(e.value)
+    await first.stop()
+
+
+def test_friendly_error_exclusive_lock():
+    msg = friendly_error(serial.SerialException("Could not exclusively lock port /dev/ttyUSB0: [Errno 11] Resource temporarily unavailable"), "/dev/ttyUSB0")
+    assert "in use" in msg
