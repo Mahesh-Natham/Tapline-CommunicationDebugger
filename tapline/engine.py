@@ -54,6 +54,7 @@ class Engine:
         self._tasks: list[asyncio.Task] = []
         self._repeat: asyncio.Task | None = None
         self._subs: set[asyncio.Queue] = set()
+        self._types: dict[int, object] = {}  # frame id -> FrameType | None (cache)
 
     # -- events -------------------------------------------------------------
     def subscribe(self) -> asyncio.Queue:
@@ -114,6 +115,7 @@ class Engine:
             raise EngineError(str(e)) from e
         self.sources, self.source_label, self.source_kind = sources, label, kind
         self.chunks, self.frames, self.markers = [], [], []
+        self.invalidate_types()
         self.error = None
         self._framer = StreamFramer(self.rule)
         if self.project:
@@ -187,6 +189,7 @@ class Engine:
             frames += framer.flush()
         self._framer = framer
         self.frames = frames
+        self.invalidate_types()
         self.protocol.framing = rule_to_json(rule)
         self.save_protocol()
         self._emit({"type": "reframed", "count": len(frames), "rule": rule_to_json(rule)})
@@ -288,7 +291,20 @@ class Engine:
         self._repeat = None
 
     # -- protocol + sessions -----------------------------------------------------------
+    def type_of(self, f: Frame):
+        """The protocol frame type of a frame (cached; cleared when framing or protocol change)."""
+        try:
+            return self._types[f.id]
+        except KeyError:
+            t = proto_mod.match_type(self.protocol, f.data)
+            self._types[f.id] = t
+            return t
+
+    def invalidate_types(self) -> None:
+        self._types = {}
+
     def save_protocol(self) -> None:
+        self.invalidate_types()
         if self.project:
             proto_mod.save(self.protocol, self.project.protocol_path)
 
@@ -311,6 +327,7 @@ class Engine:
         except ValueError:
             self.rule = GapRule(5)
         self.chunks, self.frames, self.markers = [], [], []
+        self.invalidate_types()
         self.session_name = None
         self.source_label = ""
         self.error = None

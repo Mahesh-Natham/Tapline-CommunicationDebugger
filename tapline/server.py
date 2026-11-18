@@ -107,7 +107,7 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
 
     def frame_json(f):
         d = f.to_json()
-        t = P.match_type(engine.protocol, f.data)
+        t = engine.type_of(f)
         d["type"] = t.name if t else None
         return d
 
@@ -236,7 +236,7 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
     def _frames_for(type_name: str | None, prefix: str | None):
         if type_name:
             t = P.get_type(engine.protocol, type_name)
-            return [f for f in engine.frames if P.match_type(engine.protocol, f.data) is t]
+            return [f for f in engine.frames if engine.type_of(f) is t]
         if prefix:
             pre = bytes.fromhex(prefix.replace(" ", ""))
             return [f for f in engine.frames if f.data.startswith(pre)]
@@ -254,17 +254,20 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
         return {"matches": [{"spec": s.to_json(), "ratio": r} for s, r in find_checksums(fr)[:8]]}
 
     @app.get("/api/series")
-    async def series(type: str, field: str):
+    async def series(type: str, field: str, limit: int = 200):
         t = P.get_type(engine.protocol, type)
         if not any(f.name == field for f in t.fields):
             raise NotFound(f"No field {field!r} in {type!r}")
+        limit = max(1, min(MAX_PAGE, limit))
         pts = []
-        for f in engine.frames:
-            if P.match_type(engine.protocol, f.data) is t:
+        for f in reversed(engine.frames):  # newest first; stop as soon as we have enough
+            if engine.type_of(f) is t:
                 v = P.decode(engine.protocol, f.data, t).get(field)
                 if isinstance(v, (int, float)):
                     pts.append([f.t_start, v])
-        return {"points": pts[-2000:]}
+                    if len(pts) >= limit:
+                        break
+        return {"points": pts[::-1]}
 
     # -- protocol --------------------------------------------------------------------
     @app.get("/api/protocol")
@@ -320,7 +323,7 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
     async def decode(req: Request):
         d = await body(req)
         f = engine.frame(int(d["frame_id"]))
-        t = P.match_type(engine.protocol, f.data)
+        t = engine.type_of(f)
         cs = None
         if engine.protocol.checksum:
             cs = check(engine.protocol.checksum, f.data)
@@ -407,7 +410,7 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
         w = csv.writer(buf)
         w.writerow(["id", "time", "channel", "type", "hex", "flags", "decoded"])
         for f in engine.frames:
-            t = P.match_type(engine.protocol, f.data)
+            t = engine.type_of(f)
             dec = P.decode(engine.protocol, f.data, t) if t else {}
             w.writerow([f.id, f"{f.t_start:.6f}", f.channel, t.name if t else "", f.hex(),
                         " ".join(sorted(f.flags)), json.dumps(dec, ensure_ascii=False) if dec else ""])
@@ -446,7 +449,7 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
                     items = []
                     for e in batch:
                         f = e["frame"]
-                        t = P.match_type(engine.protocol, bytes.fromhex(f["hex"].replace(" ", "")))
+                        t = P.match_type(engine.protocol, bytes.fromhex(f["hex"].replace(" ", "")))  # new frames: not cached yet
                         items.append({**f, "type": t.name if t else None})
                     await sock.send_json({"type": "frames", "items": items})
         except (WebSocketDisconnect, RuntimeError):

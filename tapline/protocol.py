@@ -39,9 +39,12 @@ class FrameType:
     match: str
     fields: list[Field] = field(default_factory=list)
     verdicts: list[dict] = field(default_factory=list)
+    _pat: tuple | None = field(default=None, repr=False, compare=False)
 
     def pattern(self) -> list[int | None]:
-        return [None if t == "??" else int(t, 16) for t in self.match.split()]
+        if self._pat is None or self._pat[0] != self.match:
+            self._pat = (self.match, [None if t == "??" else int(t, 16) for t in self.match.split()])
+        return self._pat[1]
 
 
 @dataclass
