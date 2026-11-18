@@ -288,6 +288,22 @@ class Engine:
         self.set_rule(self.rule)
         self._emit({"type": "status", "status": self.status()})
 
+    async def open_project(self, project: Project) -> None:
+        await self.stop()
+        self.project = project
+        self.protocol = proto_mod.load(project.protocol_path)
+        try:
+            self.rule = rule_from_json(self.protocol.framing)
+        except ValueError:
+            self.rule = GapRule(5)
+        self.chunks, self.frames, self.markers = [], [], []
+        self.session_name = None
+        self.source_label = ""
+        self.error = None
+        self._framer = StreamFramer(self.rule)
+        self._emit({"type": "reframed", "count": 0, "rule": rule_to_json(self.rule)})
+        self._emit({"type": "status", "status": self.status()})
+
     def frame(self, fid: int) -> Frame:
         for f in self.frames:
             if f.id == fid:

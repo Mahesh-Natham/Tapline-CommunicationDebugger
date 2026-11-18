@@ -167,10 +167,16 @@ def compose(proto: Protocol, type_name: str, values: dict, base: bytes | None = 
             if f.offset + f.size() > len(buf):
                 buf.extend(bytes(f.offset + f.size() - len(buf)))
             _write(f, buf, values[f.name])
+    return finalize(proto, bytes(buf))
+
+
+def finalize(proto: Protocol, data: bytes) -> bytes:
+    """Fix the length byte (length framing) and the checksum, as the protocol defines them."""
+    buf = bytearray(data)
     rule = rule_from_json(proto.framing)
     if isinstance(rule, LengthRule) and len(buf) >= rule.len_offset + rule.len_size:
         v = len(buf) - rule.len_offset - rule.len_size - rule.len_adjust
-        if v >= 0:
+        if 0 <= v < 256 ** rule.len_size:
             buf[rule.len_offset:rule.len_offset + rule.len_size] = v.to_bytes(rule.len_size, "little")
     out = bytes(buf)
     if proto.checksum:
