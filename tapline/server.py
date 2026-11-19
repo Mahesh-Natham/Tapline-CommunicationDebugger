@@ -88,7 +88,10 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
             ctype = request.headers.get("content-type", "").split(";")[0].strip().lower()
             if ctype != "application/json":
                 return JSONResponse({"error": "Send JSON (Content-Type: application/json)"}, status_code=415)
-        return await call_next(request)
+        response = await call_next(request)
+        if not request.url.path.startswith("/api"):
+            response.headers["Cache-Control"] = "no-cache"  # always pick up a new version after an update
+        return response
 
     # -- errors -> friendly JSON ---------------------------------------------------
     @app.exception_handler(SendNotAllowed)

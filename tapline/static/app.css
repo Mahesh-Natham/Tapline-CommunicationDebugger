@@ -28,7 +28,7 @@
 html, body { height: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.45 var(--sans);
-  display: grid; grid-template-rows: auto auto 1fr auto; min-height: 100vh;
+  display: grid; grid-template-rows: auto auto auto 1fr auto; min-height: 100vh;
 }
 .hidden { display: none !important; }
 .muted { color: var(--muted); }
