@@ -329,3 +329,4 @@ button.link:hover { text-decoration: underline; }
 .hex .sep { color: #b6c0d6; padding: 0 4px; }
 .hex .ctl { color: #9aa5bd; }
 .nodata { color: #b26a00; font-weight: 600; }
+#hintbar.problem { background: #fff4e5; border-bottom-color: #f6dca8; }

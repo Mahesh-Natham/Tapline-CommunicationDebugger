@@ -34,7 +34,7 @@ def friendly_error(exc: BaseException, port: str) -> str:
     low = msg.lower()
     code = getattr(exc, "errno", None)
     if "access is denied" in low or "exclusively lock" in low or "busy" in low or code == errno.EBUSY or "resource temporarily" in low:
-        return f"{port} is in use by another program. Close other serial monitors (Arduino IDE, PuTTY…) and try again."
+        return f"{port} is in use by another program. Close HTerm, PuTTY, Arduino IDE or any other serial monitor using it, then press Start again."
     if code == errno.EACCES or "permission denied" in low:
         return (f"Permission denied for {port}. On Linux add yourself to the dialout group "
                 f"(sudo usermod -aG dialout $USER, then log out and in).")

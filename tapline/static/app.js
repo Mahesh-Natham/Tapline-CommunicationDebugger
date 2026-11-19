@@ -121,6 +121,7 @@ function onSourceChange() {
   store("tl.source", v);
   if (kind === "ladev" || kind === "lafile") { renderLaPins(); if (kind === "lafile") loadCaptures(); }
   if (kind === "can") loadCan();
+  $("#hintbar").classList.remove("problem");
   $("#srcHint").innerHTML = sourceHint(v, kind);
 }
 function sourceHint(v, kind) {
@@ -188,10 +189,18 @@ function applyConfig(cfg) {
   saveSettings();
 }
 
+function showProblem(msg) {
+  $("#srcHint").innerHTML = `<span class='nodata'>⚠ ${esc(msg)}</span>`;
+  $("#hintbar").classList.add("problem");
+}
 async function toggleStart() {
   if (S.status.running) { await safe(async () => applyStatus(await api("stop", {}))); return; }
   const src = $("#source").value;
-  await safe(async () => {
+  $("#hintbar").classList.remove("problem");
+  try { await startNow(src); } catch (e) { toast(e.message, "err"); showProblem(e.message); }
+}
+async function startNow(src) {
+  await (async () => {
     const body = startBody(src);
     if (sourceKind(src) === "serial" && $("#source2").value && !$("#secondWrap").classList.contains("hidden")) body.config2 = currentConfig($("#source2").value);
     const st = await api("start", body);  // throws on failure: keep what's on screen
@@ -199,7 +208,7 @@ async function toggleStart() {
     renderAll(); clearInspect();
     applyStatus(st);
     toast(sourceKind(src) === "demo" ? "Demo running — watch the messages arrive" : sourceKind(src).startsWith("la") ? "Logic analyzer: capturing and decoding…" : `Listening — ${st.source}`, "ok");
-  });
+  })();
 }
 
 /* ---------------- status ---------------- */
@@ -223,8 +232,10 @@ function applyStatus(st) {
   $("#logExport").classList.toggle("hidden", !st.session);
   const live = st.running && !["sigrok", "sim-la"].includes(st.source_kind);
   const bytesTxt = live || st.bytes ? ` · ${(st.bytes || 0).toLocaleString()} bytes` : "";
+  if (st.error) { showProblem(st.error); }
+  else if ($("#hintbar").classList.contains("problem") && st.running) $("#hintbar").classList.remove("problem");
   const noData = st.running && st.source_kind === "serial" && !st.bytes;
-  $("#srcHint").innerHTML = noData
+  if (!$("#hintbar").classList.contains("problem")) $("#srcHint").innerHTML = noData
     ? "<span class='nodata'>No bytes received yet.</span> Check: adapter <b>GND → board GND</b>, adapter <b>RX → controller TX</b>, the controller is powered and sending, and no other program (HTerm, Arduino…) has the port open."
     : sourceHint($("#source").value, sourceKind($("#source").value));
   $("#statusText").innerHTML = `${dot}${what}${bytesTxt} · ${st.frames} messages${st.markers ? ` · ${st.markers} markers` : ""}${st.repeating ? " · <b>repeating send</b>" : ""}${st.project ? ` · project <b>${esc(st.project)}</b>` : ""}`;
