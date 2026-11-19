@@ -82,6 +82,11 @@
     <button class="ghost tiny" id="guessFraming" title="Try common framings on the data and rank them">Guess</button>
   </div>
   <div class="group right muted" id="statusText">Not capturing</div>
+  <div class="group logbox">
+    <span class="rec hidden" id="recPill" title="Every byte is saved to a log file in your project folder">⏺ Logging</span>
+    <a class="btn ghost tiny" id="aiExport" href="api/export/ai.md" download title="One readable file with the capture, your notes and a byte analysis — give it to Claude or ChatGPT">🤖 Export for AI</a>
+    <a class="btn ghost tiny" id="logExport" href="api/export/log.jsonl" download title="The raw log file (every byte with its timestamp)">⬇ Log</a>
+  </div>
 </div>
 
 <main id="main">
@@ -192,7 +197,9 @@
       </div>
       <div id="protoOut"></div>
       <div class="actions wrap">
+        <a class="btn ghost" href="api/export/ai.md" download>🤖 Export for AI (Markdown)</a>
         <a class="btn ghost" href="api/export/frames.csv" download>Export messages (CSV)</a>
+        <a class="btn ghost" href="api/export/log.jsonl" download>Raw log (JSONL)</a>
         <a class="btn ghost" href="api/export/protocol.json" download>Export protocol (JSON)</a>
         <button class="ghost" id="tourAgain">Show the tour again</button>
       </div>

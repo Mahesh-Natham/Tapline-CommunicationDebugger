@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 import base64
 import binascii
 
+from .ai_export import build_report
 from . import autodetect, la_sim, modbus, protocol as P
 from .sources import can_source, sigrok
 from .sources.base import SourceError
@@ -541,6 +542,21 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
                         " ".join(sorted(f.flags)), json.dumps(dec, ensure_ascii=False) if dec else ""])
         return Response(buf.getvalue(), media_type="text/csv",
                         headers={"Content-Disposition": 'attachment; filename="tapline-frames.csv"'})
+
+    @app.get("/api/export/ai.md")
+    async def export_ai():
+        name = (engine.session_name or "capture").removesuffix(".jsonl")
+        return Response(build_report(engine), media_type="text/markdown; charset=utf-8",
+                        headers={"Content-Disposition": f'attachment; filename="tapline-{name}-for-ai.md"'})
+
+    @app.get("/api/export/log.jsonl")
+    async def export_log():
+        name = engine.session_name
+        path = engine.project.root / "sessions" / name if (engine.project and name) else None
+        if not path or not path.is_file():
+            raise NotFound("No log yet. Press Start to record one.")
+        return Response(path.read_bytes(), media_type="application/x-ndjson",
+                        headers={"Content-Disposition": f'attachment; filename="tapline-{name}"'})
 
     @app.get("/api/export/protocol.json")
     async def export_proto():

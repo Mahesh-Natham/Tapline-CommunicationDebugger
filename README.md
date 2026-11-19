@@ -130,6 +130,25 @@ GND:  any GND pin → target GND            ⚠️ Pico pins are 3.3 V only
 
 ---
 
+## Data logging & AI analysis
+
+Every capture is **logged automatically** while it runs (you'll see a red **⏺ Logging** badge). Each log is saved in `~/Tapline/<project>/sessions/` with the date and time in its name, and holds every byte with its timestamp plus your markers. Reopen old logs from **Protocol → Saved captures**.
+
+Next to the status line:
+
+- **🤖 Export for AI** downloads one readable Markdown file to give to Claude, ChatGPT or another AI. It contains:
+  - how the data was captured
+  - what you've already worked out
+  - each event you marked, with the messages just before and after it
+  - every kind of message with a byte map (constant / changing / counter)
+  - the message log, up to 3000 lines
+
+  The file starts with instructions for the AI, so you can just attach it and ask *"what does this protocol mean?"*.
+- **⬇ Log** downloads the raw log (JSON Lines) for your own scripts.
+- **Protocol → Export messages (CSV)** opens in Excel.
+
+---
+
 ## Troubleshooting
 
 | Problem | Fix |

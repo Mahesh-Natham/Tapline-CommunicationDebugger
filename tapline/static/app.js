@@ -218,6 +218,9 @@ function applyStatus(st) {
   $$("#modeSeg button").forEach(x => x.classList.toggle("on", x.dataset.mode === st.mode));
   const dot = `<span class="dot ${st.running ? "live" : ""}"></span>`;
   const what = st.running ? esc(st.source) : (st.source ? `Stopped · ${esc(st.source)}` : "Not capturing");
+  $("#recPill").classList.toggle("hidden", !(st.running && st.session));
+  $("#recPill").title = st.session ? `Saving every byte to ${st.project ? "~/Tapline/" + st.project + "/" : ""}sessions/${st.session}` : "";
+  $("#logExport").classList.toggle("hidden", !st.session);
   $("#statusText").innerHTML = `${dot}${what} · ${st.frames} messages${st.markers ? ` · ${st.markers} markers` : ""}${st.repeating ? " · <b>repeating send</b>" : ""}${st.project ? ` · project <b>${esc(st.project)}</b>` : ""}`;
   if (st.rule && !document.activeElement?.closest?.("#subbar")) showRule(st.rule);
 }
