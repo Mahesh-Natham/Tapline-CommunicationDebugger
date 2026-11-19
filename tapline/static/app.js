@@ -107,6 +107,39 @@ function onSourceChange() {
   store("tl.source", v);
   if (kind === "ladev" || kind === "lafile") { renderLaPins(); if (kind === "lafile") loadCaptures(); }
   if (kind === "can") loadCan();
+  $("#srcHint").innerHTML = sourceHint(v, kind);
+}
+function sourceHint(v, kind) {
+  if (kind === "demo") return "<b>Demo</b>: no settings needed, just press <b>▶ Start</b>. For your adapter, open <b>Source</b> and pick its <b>COM port</b>; Baud, Parity and Stop then appear here.";
+  if (kind === "serial" && !v) return "<b>No adapter found.</b> Plug in your USB-TTL, wait 3 s, press <b>↻</b>. Windows: check Device Manager → Ports (COM &amp; LPT); you may need the CH340 or CP210x driver.";
+  if (kind === "serial") return "Not sure of the speed? Press <b>✨ Detect</b> while the board is running, then <b>▶ Start</b>.";
+  return "";
+}
+function guide(tab = "demo") {
+  const demo = `<ol>
+    <li><b>Source</b> → <b>UART display (demo)</b> → <b>▶ Start</b>. A fake controller starts talking to a fake display.</li>
+    <li>Messages appear on the left. Click one to see its bytes.</li>
+    <li>The demo sends a temperature around <b>25</b>. Press <kbd>Space</kbd> to mark the moment and type “shows 25”.</li>
+    <li>Open <b>Find value</b>, type <code>25</code>, <b>Find</b>. Click the top match → <b>Name these bytes…</b> → call it <code>temperature</code>.</li>
+    <li>Open <b>Byte map</b> (constant / changing bytes) and <b>Checksum</b> (works out how the last byte is computed).</li>
+    <li>Switch top-right to <b>Send</b>. Pick a message → <b>Edit &amp; send</b>, change a byte, <b>Send</b>. Tapline fixes the checksum for you.</li>
+    <li>Try the other demos in <b>Source</b>: Modbus RS-485, logic analyzer (UART / I²C / SPI), CAN car. Press <b>■ Stop</b> before switching.</li></ol>`;
+  const hw = `<ol>
+    <li><b>Wire it (listen only):</b> adapter <b>GND → board GND</b>, adapter <b>RX → controller TX</b> (the wire going to the display). Leave adapter TX unconnected. Set the adapter's jumper to the board voltage (3.3 V or 5 V). <b>🔌 Wiring</b> shows the picture.</li>
+    <li>Plug the adapter into USB and press <b>↻</b> next to Source.</li>
+    <li><b>Source</b> → under <b>Serial ports</b> pick your adapter (e.g. <code>COM5 — USB-SERIAL CH340</code>). Now <b>Link, Baud, Data, Parity, Stop</b> appear.</li>
+    <li>Power the board. Press <b>✨ Detect</b>: it only listens and suggests the best settings; click one. Or choose Baud / Parity yourself.</li>
+    <li><b>▶ Start</b> (stay in <b>Sniff</b> mode). Messages should repeat in a pattern. Random bytes / 00 / FF → wrong baud. Nothing → check GND and that RX is on the controller's TX.</li>
+    <li>If messages are cut in odd places, press <b>Guess</b> next to <b>Framing</b>.</li>
+    <li>Change something on the display, press <kbd>Space</kbd>, then use <b>Find value</b> as in the demo.</li>
+    <li><b>To send:</b> switch to <b>Send</b> and follow the checklist (disconnect controller TX from the display, adapter TX → display RX). Edit a captured message, <b>Send</b>, then mark ✓ / ✗ by what the display did.</li></ol>
+    <p>Stuck? Send Claude a screenshot of the whole window.</p>`;
+  openModal(`<div class="guide"><h2>How to use Tapline</h2>
+    <div class="tabs2"><button class="ghost ${tab === "demo" ? "on" : ""}" data-g="demo">1 · Try the demo</button><button class="ghost ${tab === "hw" ? "on" : ""}" data-g="hw">2 · Test with real hardware</button></div>
+    <div class="gpane">${tab === "demo" ? demo : hw}</div>
+    <div class="row-inline" style="justify-content:flex-end;margin-top:10px"><button class="primary" id="guideClose">Got it</button></div></div>`);
+  $$("#modalCard [data-g]").forEach(b => b.onclick = () => guide(b.dataset.g));
+  $("#guideClose").onclick = () => $("#modal").classList.add("hidden");
 }
 function setupSettings() {
   const o = S.options;
@@ -857,6 +890,7 @@ function bind() {
   $("#stopSend").onclick = () => safe(async () => { applyStatus(await api("send/stop", {})); toast("Stopped sending"); });
   $("#replaySel").onclick = replaySelected;
   $("#wiringBtn").onclick = () => wiringGuide();
+  $("#guideBtn").onclick = () => guide();
   $("#laScan").onclick = laScan;
   $("#laProto").onchange = renderLaPins;
   $("#laFile").onchange = renderLaPins;

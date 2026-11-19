@@ -54,9 +54,11 @@
     <label class="field only-can"><span>Channel</span><input id="canCh" placeholder="COM6 · can0 · PCAN_USBBUS1" style="width:170px"></label>
     <label class="field only-can"><span>Bitrate</span><select id="canRate"></select></label>
     <button class="ghost tiny" id="wiringBtn" title="How to connect this kind of link">🔌 Wiring</button>
+    <span class="src-hint" id="srcHint"></span>
   </div>
 
   <div class="group right">
+    <button class="ghost" id="guideBtn" title="Step-by-step: try the demo, then test with your hardware">❓ Guide</button>
     <button class="primary" id="startBtn" data-tour="start">▶ Start</button>
     <div class="seg" id="modeSeg" role="tablist" aria-label="Mode" data-tour="mode">
       <button data-mode="sniff" class="on" title="Listen only — never transmits">Sniff</button>

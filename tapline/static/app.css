@@ -285,3 +285,12 @@ body:not(.send-mode) #composeBox { opacity: .45; pointer-events: none; }
   .grid2 { grid-template-columns: 1fr; }
   #hint { display: none; }
 }
+
+.src-hint { font-size: 12px; color: #5b6b8c; background: #eef3ff; border: 1px solid #d6e0ff; border-radius: 8px; padding: 4px 8px; max-width: 380px; line-height: 1.35; }
+.src-hint:empty { display: none; }
+.src-hint b { color: #2f4fb8; }
+.guide ol { margin: 6px 0 6px 18px; padding: 0; line-height: 1.6; }
+.guide .tabs2 { display: flex; gap: 6px; margin: 6px 0 4px; }
+.guide .tabs2 button.on { background: #4f7cff; color: #fff; }
+.guide .gpane { max-height: 60vh; overflow: auto; }
+.guide kbd, .guide code { background: #f1f4fa; border-radius: 4px; padding: 0 4px; }
