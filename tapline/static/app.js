@@ -886,7 +886,34 @@ function connect() {
       $("#detLabel").textContent = m.label ? `Trying ${m.label}… (${m.done}/${m.total})` : "";
     }
   };
-  ws.onclose = () => setTimeout(connect, 1500);
+  ws.onopen = () => { S.wsFails = 0; stopPolling(); };
+  ws.onclose = () => {
+    S.wsFails = (S.wsFails || 0) + 1;
+    if (S.wsFails >= 2) startPolling();
+    setTimeout(connect, S.wsFails >= 2 ? 5000 : 1500);
+  };
+}
+/* Fallback when the live connection is unavailable: ask the server every half second. */
+function startPolling() {
+  if (S.poll) return;
+  showProblem("Live connection to Tapline failed, so updates are fetched every ½ s instead. To fix it, close Tapline and run run.bat again (it installs the missing 'websockets' package).");
+  S.poll = setInterval(async () => {
+    try {
+      const st = await api("status");
+      const last = S.frames.length ? S.frames[S.frames.length - 1].id : -1;
+      if (st.frames > 0 && (last < 0 || st.frames - 1 > last)) {
+        const r = await api(`frames?after=${last}&limit=2000`);
+        appendFrames(r.items);
+      }
+      applyStatus(st);
+    } catch (e) { /* server gone: keep trying */ }
+  }, 500);
+}
+function stopPolling() {
+  if (!S.poll) return;
+  clearInterval(S.poll); S.poll = null;
+  $("#hintbar").classList.remove("problem");
+  $("#srcHint").innerHTML = sourceHint($("#source").value, sourceKind($("#source").value));
 }
 
 /* ---------------- wire up ---------------- */

@@ -1,4 +1,5 @@
 fastapi>=0.110
 uvicorn>=0.27
+websockets>=12  # live updates in the browser; plain uvicorn has no WebSocket support
 pyserial>=3.5
 python-can>=4.0

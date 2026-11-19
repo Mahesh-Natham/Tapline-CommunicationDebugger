@@ -28,6 +28,15 @@ def main(argv=None) -> None:
     ap.add_argument("--project", default="Default", help="project name (folder under ~/Tapline)")
     ap.add_argument("--no-browser", action="store_true", help="don't open the browser")
     args = ap.parse_args(argv)
+    try:
+        import websockets  # noqa: F401  (uvicorn needs it for the live connection)
+    except ImportError:
+        try:
+            import wsproto  # noqa: F401
+        except ImportError:
+            print("\n  Tapline needs the 'websockets' package for live updates. Install it with:\n"
+                  "      py -m pip install -r requirements.txt\n  (or: pip install websockets), then start Tapline again.\n")
+            raise SystemExit(1)
     port = _free_port(args.port)
     url = f"http://localhost:{port}"
     print(f"\n  Tapline is running at {url}\n  Press Ctrl+C to quit.\n")

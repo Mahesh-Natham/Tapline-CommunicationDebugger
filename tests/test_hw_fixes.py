@@ -46,3 +46,11 @@ def test_status_counts_raw_bytes(tmp_path):
             time.sleep(0.05)
         assert c.get("/api/status").json()["bytes"] > 0
         c.post("/api/stop", json={})
+
+
+def test_requirements_include_websocket_support():
+    """Plain uvicorn rejects WebSockets (HTTP 404), so the browser never got live data."""
+    from pathlib import Path
+    req = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text()
+    names = {l.split(">")[0].split("=")[0].split("[")[0].strip().lower() for l in req.splitlines() if l.strip() and not l.startswith("#")}
+    assert "websockets" in names or "wsproto" in names or "uvicorn[standard]" in req
