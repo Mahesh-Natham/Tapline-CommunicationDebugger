@@ -24,7 +24,8 @@ def list_ports() -> list[dict]:
     for p in sorted(_lp.comports(), key=lambda p: p.device):
         out.append({"device": p.device, "description": p.description or p.device,
                     "vid": f"{p.vid:04X}" if p.vid is not None else None,
-                    "pid": f"{p.pid:04X}" if p.pid is not None else None})
+                    "pid": f"{p.pid:04X}" if p.pid is not None else None,
+                    "manufacturer": p.manufacturer or ""})
     return out
 
 

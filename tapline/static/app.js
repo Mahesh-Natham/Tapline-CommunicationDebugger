@@ -80,17 +80,30 @@ async function loadPorts() {
   const r = await api("ports");
   S.ports = r.ports;
   const prev = $("#source").value || store("tl.source") || "simulator";
-  const ports = r.ports.map(p => [p.device, `${p.device} — ${p.description}${p.vid ? ` (${p.vid}:${p.pid})` : ""}`]);
+  const ports = r.ports.map(p => [p.device, portLabel(p)]);
   $("#source").innerHTML = optgroup("Try without hardware", DEMOS) +
     optgroup("Serial ports (USB-TTL, RS-232, RS-485)", ports.length ? ports : [["", "No serial ports found — plug in an adapter, press ↻"]]) +
     optgroup("Logic analyzer", [["la-device", "Capture from a logic analyzer (sigrok)"], ["la-file", "Open a capture file (.sr)"]]) +
     optgroup("CAN bus", [["can", "CAN adapter"]]);
+  r.ports.forEach(p => { const o = $$("#source option").find(x => x.value === p.device); if (o) o.title = `${p.device} — ${p.description}`; });
   const values = $$("#source option").map(o => o.value);
   $("#source").value = values.includes(prev) && prev ? prev : "simulator";
   const portItems = r.ports.map(p => [p.device, p.device]);
   fillSelect($("#source2"), [["", "— none —"]].concat(portItems));
   fillSelect($("#picoPort"), portItems.length ? portItems : [["", "No serial ports"]], store("tl.picoPort") || undefined);
   onSourceChange();
+}
+const CHIPS = [[/ch34\d|wch/i, "CH340"], [/cp21\d\d|silicon lab/i, "CP210x"], [/ft\d{3}|ftdi/i, "FTDI"],
+  [/pl2303|prolific/i, "PL2303"], [/pico|rp2040|micropython|board in fs/i, "Pico"], [/canable|candle|gs_usb/i, "CAN"],
+  [/arduino/i, "Arduino"], [/bluetooth/i, "Bluetooth"]];
+function portLabel(p) {
+  const VIDS = { "1A86": "CH340", "10C4": "CP210x", "0403": "FTDI", "067B": "PL2303", "2E8A": "Pico" };
+  const desc = `${p.description || ""} ${p.manufacturer || ""}`;
+  const chip = CHIPS.find(([re]) => re.test(desc));
+  let tag = VIDS[p.vid] || (chip ? chip[1] : (p.description || "").replace(/\(?(COM\d+|\/dev\/\S+)\)?/gi, "").replace(/usb[- ]?(to[- ])?(serial|uart)|device|port/gi, "").trim());
+  if (tag.length > 14) tag = tag.slice(0, 13) + "…";
+  const dev = p.device.replace(/^\/dev\//, "");
+  return tag && tag !== dev ? `${dev} · ${tag}` : dev;
 }
 function sourceKind(v) {
   if (v === "la-device") return "ladev";
@@ -112,7 +125,10 @@ function onSourceChange() {
 function sourceHint(v, kind) {
   if (kind === "demo") return "<b>Demo</b>: no settings needed, just press <b>▶ Start</b>. For your adapter, open <b>Source</b> and pick its <b>COM port</b>; Baud, Parity and Stop then appear here.";
   if (kind === "serial" && !v) return "<b>No adapter found.</b> Plug in your USB-TTL, wait 3 s, press <b>↻</b>. Windows: check Device Manager → Ports (COM &amp; LPT); you may need the CH340 or CP210x driver.";
-  if (kind === "serial") return "Not sure of the speed? Press <b>✨ Detect</b> while the board is running, then <b>▶ Start</b>.";
+  if (kind === "serial") return "Adapter selected: set <b>Baud / Data / Parity / Stop</b> above, or press <b>✨ Detect</b> while the board is running. Then <b>▶ Start</b>.";
+  if (kind === "ladev") return "Press <b>Scan</b> to find your logic analyzer, choose the protocol and pins, then <b>▶ Start</b>.";
+  if (kind === "lafile") return "Pick a saved <b>.sr</b> capture (or Import one), choose the protocol, then <b>▶ Start</b>.";
+  if (kind === "can") return "Choose interface, channel and bitrate (cars: usually 500k), then <b>▶ Start</b>.";
   return "";
 }
 function guide(tab = "demo") {
@@ -891,6 +907,7 @@ function bind() {
   $("#replaySel").onclick = replaySelected;
   $("#wiringBtn").onclick = () => wiringGuide();
   $("#guideBtn").onclick = () => guide();
+  $("#hintGuide").onclick = () => guide(sourceKind($("#source").value) === "serial" ? "hw" : "demo");
   $("#laScan").onclick = laScan;
   $("#laProto").onchange = renderLaPins;
   $("#laFile").onchange = renderLaPins;

@@ -23,7 +23,7 @@
       </div>
     </label>
     <label class="field only-serial"><span>Link</span>
-      <select id="link"><option value="ttl">TTL UART (3.3/5 V)</option><option value="rs232">RS-232 (±12 V)</option><option value="rs485">RS-485 (A/B pair)</option></select>
+      <select id="link"><option value="ttl">TTL</option><option value="rs232">RS-232</option><option value="rs485">RS-485</option></select>
     </label>
     <label class="field only-serial"><span>Baud</span>
       <div class="row-inline">
@@ -35,7 +35,7 @@
     <label class="field only-serial"><span>Parity</span><select id="parity"></select></label>
     <label class="field only-serial"><span>Stop</span><select id="stopbits"></select></label>
     <button class="ghost only-detect" id="detectBtn" title="Listen and guess baud rate and format (never transmits)">✨ Detect</button>
-    <button class="ghost tiny only-serial" id="secondBtn" title="Listen to the other direction on a second adapter">+ 2nd adapter</button>
+    <button class="ghost tiny only-serial" id="secondBtn" title="Listen to the other direction on a second adapter">+ 2nd</button>
     <label class="field hidden" id="secondWrap"><span>Other direction</span><select id="source2"></select></label>
 
     <label class="field only-ladev"><span>Analyzer</span>
@@ -54,11 +54,10 @@
     <label class="field only-can"><span>Channel</span><input id="canCh" placeholder="COM6 · can0 · PCAN_USBBUS1" style="width:170px"></label>
     <label class="field only-can"><span>Bitrate</span><select id="canRate"></select></label>
     <button class="ghost tiny" id="wiringBtn" title="How to connect this kind of link">🔌 Wiring</button>
-    <span class="src-hint" id="srcHint"></span>
   </div>
 
   <div class="group right">
-    <button class="ghost" id="guideBtn" title="Step-by-step: try the demo, then test with your hardware">❓ Guide</button>
+    <button class="primary soft" id="guideBtn" title="Step-by-step: try the demo, then test with your hardware">❓ Help</button>
     <button class="primary" id="startBtn" data-tour="start">▶ Start</button>
     <div class="seg" id="modeSeg" role="tablist" aria-label="Mode" data-tour="mode">
       <button data-mode="sniff" class="on" title="Listen only — never transmits">Sniff</button>
@@ -67,6 +66,7 @@
   </div>
 </header>
 
+<div id="hintbar"><span class="bulb">💡</span><span id="srcHint"></span><button class="link" id="hintGuide">Open the step-by-step guide →</button></div>
 <div id="subbar">
   <div class="group">
     <label class="field inline"><span>Framing</span><select id="frameKind">
