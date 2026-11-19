@@ -55,6 +55,7 @@ class Engine:
         self.source_label = ""
         self.source_kind = ""
         self.chunks: list[Chunk] = []
+        self.rx_bytes = 0
         self.frames: list[Frame] = []
         self.markers: list[Marker] = []
         self.error: str | None = None
@@ -86,7 +87,7 @@ class Engine:
         return {
             "running": self.running, "source": self.source_label, "source_kind": self.source_kind,
             "mode": self.mode, "rule": rule_to_json(self.rule), "frames": len(self.frames),
-            "chunks": len(self.chunks), "markers": len(self.markers), "error": self.error,
+            "chunks": len(self.chunks), "bytes": self.rx_bytes, "markers": len(self.markers), "error": self.error,
             "project": self.project.name if self.project else None, "session": self.session_name,
             "repeating": bool(self._repeat and not self._repeat.done()),
             "link": self.link,
@@ -151,6 +152,7 @@ class Engine:
             self.protocol.framing = rule_to_json(auto_rule)
             self.save_protocol()
         self.chunks, self.frames, self.markers = [], [], []
+        self.rx_bytes = 0
         self.invalidate_types()
         self.error = None
         self._framer = StreamFramer(self.rule)
@@ -224,8 +226,15 @@ class Engine:
             self._emit({"type": "error", "message": src.error})
 
     async def _ticker(self):
+        last_report, last_bytes = 0.0, -1
         while True:
             await asyncio.sleep(0.02)
+            now = time.time()
+            if now - last_report >= 1.0:  # live byte counter, so "no data at all" is visible
+                last_report = now
+                if self.rx_bytes != last_bytes or last_bytes == -1:
+                    last_bytes = self.rx_bytes
+                    self._emit({"type": "status", "status": self.status()})
             if any(getattr(s, "offline", False) for s in self.sources):
                 continue  # recorded data: timestamps are in the past, silence means nothing
             for f in self._framer.flush_idle(time.time()):
@@ -233,6 +242,7 @@ class Engine:
 
     def _ingest(self, c: Chunk):
         self.chunks.append(c)
+        self.rx_bytes += len(c.data)
         if self._writer:
             self._writer.write_chunk(c)
         for f in self._framer.feed(c):

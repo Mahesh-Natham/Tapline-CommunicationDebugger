@@ -221,7 +221,13 @@ function applyStatus(st) {
   $("#recPill").classList.toggle("hidden", !(st.running && st.session));
   $("#recPill").title = st.session ? `Saving every byte to ${st.project ? "~/Tapline/" + st.project + "/" : ""}sessions/${st.session}` : "";
   $("#logExport").classList.toggle("hidden", !st.session);
-  $("#statusText").innerHTML = `${dot}${what} · ${st.frames} messages${st.markers ? ` · ${st.markers} markers` : ""}${st.repeating ? " · <b>repeating send</b>" : ""}${st.project ? ` · project <b>${esc(st.project)}</b>` : ""}`;
+  const live = st.running && !["sigrok", "sim-la"].includes(st.source_kind);
+  const bytesTxt = live || st.bytes ? ` · ${(st.bytes || 0).toLocaleString()} bytes` : "";
+  const noData = st.running && st.source_kind === "serial" && !st.bytes;
+  $("#srcHint").innerHTML = noData
+    ? "<span class='nodata'>No bytes received yet.</span> Check: adapter <b>GND → board GND</b>, adapter <b>RX → controller TX</b>, the controller is powered and sending, and no other program (HTerm, Arduino…) has the port open."
+    : sourceHint($("#source").value, sourceKind($("#source").value));
+  $("#statusText").innerHTML = `${dot}${what}${bytesTxt} · ${st.frames} messages${st.markers ? ` · ${st.markers} markers` : ""}${st.repeating ? " · <b>repeating send</b>" : ""}${st.project ? ` · project <b>${esc(st.project)}</b>` : ""}`;
   if (st.rule && !document.activeElement?.closest?.("#subbar")) showRule(st.rule);
 }
 
@@ -279,10 +285,30 @@ function ruleText(r) {
 }
 
 /* ---------------- messages list ---------------- */
+const CTL = { 0: "NUL", 9: "TAB", 10: "LF", 13: "CR", 27: "ESC" };
+function asciiChar(v) {
+  if (v >= 32 && v < 127) return esc(String.fromCharCode(v));
+  return `<span class="ctl">${v === 10 ? "↵" : v === 13 ? "␍" : "·"}</span>`;
+}
+function byteSpan(h, i, text) {
+  return `<span class="b${S.hlOffset === i ? " hl" : ""}" data-off="${i}">${text}</span>`;
+}
+function bytesView(bytes, limit) {
+  const mode = S.view || "hex";
+  const part = bytes.slice(0, limit);
+  if (mode === "ascii") return part.map((h, i) => byteSpan(h, i, asciiChar(parseInt(h, 16)))).join("");
+  if (mode === "dec") return part.map((h, i) => byteSpan(h, i, String(parseInt(h, 16)).padStart(3, " "))).join(" ");
+  if (mode === "bin") return part.map((h, i) => byteSpan(h, i, parseInt(h, 16).toString(2).padStart(8, "0"))).join(" ");
+  const hex = part.map((h, i) => byteSpan(h, i, h)).join(" ");
+  if (mode === "both") return `${hex}<span class="sep">│</span><span class="asc">${part.map(h => asciiChar(parseInt(h, 16))).join("")}</span>`;
+  return hex;
+}
+const VIEW_LIMIT = { hex: 48, both: 32, ascii: 160, dec: 40, bin: 16 };
 function frameRow(f, fresh) {
   const bytes = f.hex ? f.hex.split(" ") : [];
-  const shown = bytes.slice(0, 48).map((h, i) => `<span class="b${S.hlOffset === i ? " hl" : ""}" data-off="${i}">${h}</span>`).join(" ");
-  const more = bytes.length > 48 ? ` <span class="muted">… +${bytes.length - 48}</span>` : "";
+  const limit = VIEW_LIMIT[S.view || "hex"];
+  const shown = bytesView(bytes, limit);
+  const more = bytes.length > limit ? ` <span class="muted">… +${bytes.length - limit}</span>` : "";
   const flags = (f.flags || []).map(x => `<span class="flag">${esc(x)}</span>`).join("");
   return `<div class="frow${S.selected === f.id ? " sel" : ""}${fresh ? " new" : ""}" data-id="${f.id}">
     <span class="t">${fmtTime(f.t_start)}</span><span class="chan ${chanClass(f.channel)}">${esc(chanLabel(f.channel))}</span>
@@ -861,6 +887,9 @@ function bind() {
   $("#applyFraming").onclick = () => applyFraming();
   $("#guessFraming").onclick = guessFraming;
   $("#filter").oninput = renderAll;
+  S.view = store("tl.view") || "hex";
+  $("#viewMode").value = S.view;
+  $("#viewMode").onchange = e => { S.view = e.target.value; store("tl.view", S.view); renderAll(); };
   $("#follow").onchange = e => {
     S.follow = e.target.checked;
     if (S.follow) { if (S.windowEnd !== null) { S.windowEnd = null; renderAll(); } scrollBottom(); }

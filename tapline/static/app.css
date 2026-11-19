@@ -323,3 +323,9 @@ button.link:hover { text-decoration: underline; }
   border-radius: 999px; padding: 2px 9px; animation: recpulse 1.6s ease-in-out infinite; }
 @keyframes recpulse { 50% { opacity: .55; } }
 @media (prefers-reduced-motion: reduce) { .rec { animation: none; } }
+
+.viewmode { font-size: 12.5px; padding: 3px 6px; }
+.hex .asc { color: #1f7a52; }
+.hex .sep { color: #b6c0d6; padding: 0 4px; }
+.hex .ctl { color: #9aa5bd; }
+.nodata { color: #b26a00; font-weight: 600; }

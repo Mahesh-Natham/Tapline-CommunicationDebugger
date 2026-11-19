@@ -48,9 +48,16 @@ def friendly_error(exc: BaseException, port: str) -> str:
 def _open(cfg: SerialConfig, timeout: float = 0.02) -> serial.Serial:
     extra = {"exclusive": True} if os.name == "posix" else {}  # Windows locks ports by itself
     try:
-        return serial.Serial(cfg.port, cfg.baud, bytesize=cfg.bytesize, parity=_PARITY[cfg.parity],
-                             stopbits=_STOP.get(float(cfg.stopbits), serial.STOPBITS_ONE),
-                             timeout=timeout, write_timeout=2, **extra)
+        ser = serial.Serial(None, cfg.baud, bytesize=cfg.bytesize, parity=_PARITY[cfg.parity],
+                            stopbits=_STOP.get(float(cfg.stopbits), serial.STOPBITS_ONE),
+                            timeout=timeout, write_timeout=2, **extra)
+        # Leave DTR and RTS off, like HTerm/PuTTY defaults. Many boards wire them to RESET/BOOT,
+        # and switching them on when the port opens would stop the controller we're listening to.
+        ser.dtr = False
+        ser.rts = False
+        ser.port = cfg.port
+        ser.open()
+        return ser
     except (serial.SerialException, OSError, ValueError) as e:
         raise SourceError(friendly_error(e, cfg.port)) from e
 

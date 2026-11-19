@@ -94,6 +94,9 @@
     <div class="pane-head">
       <strong>Messages</strong>
       <input id="filter" type="search" placeholder="Filter: hex, type or channel" aria-label="Filter messages">
+      <select id="viewMode" class="viewmode" title="How to show the bytes" aria-label="Show bytes as">
+        <option value="hex">Hex</option><option value="ascii">ASCII</option><option value="both">Hex + ASCII</option>
+        <option value="dec">Decimal</option><option value="bin">Binary</option></select>
       <label class="toggle" title="Keep the newest message in view"><input type="checkbox" id="follow" checked> Follow</label>
     </div>
     <div id="frames" tabindex="0" aria-label="Captured messages">
