@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import base64
@@ -582,6 +582,17 @@ def create_app(project: str = "Default", base: Path | None = None) -> FastAPI:
             pass
         finally:
             engine.unsubscribe(q)
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/index.html", include_in_schema=False)
+    def index_page():
+        # Stamp app.css / app.js with their modification time so a browser never
+        # mixes a new page with old cached styles or script after an update.
+        html = (STATIC / "index.html").read_text(encoding="utf-8")
+        for name in ("app.css", "app.js"):
+            v = int((STATIC / name).stat().st_mtime)
+            html = html.replace(f'"{name}"', f'"{name}?v={v}"')
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
     if STATIC.exists():
         app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")

@@ -100,7 +100,8 @@ function portLabel(p) {
   const VIDS = { "1A86": "CH340", "10C4": "CP210x", "0403": "FTDI", "067B": "PL2303", "2E8A": "Pico" };
   const desc = `${p.description || ""} ${p.manufacturer || ""}`;
   const chip = CHIPS.find(([re]) => re.test(desc));
-  let tag = VIDS[p.vid] || (chip ? chip[1] : (p.description || "").replace(/\(?(COM\d+|\/dev\/\S+)\)?/gi, "").replace(/usb[- ]?(to[- ])?(serial|uart)|device|port/gi, "").trim());
+  const exact = desc.match(/\b(CH3\d\d[A-Z]?|CP21\d\d|FT\d{3}[A-Z]*|PL2303\w*)\b/i);
+  let tag = exact ? exact[1].toUpperCase() : VIDS[p.vid] || (chip ? chip[1] : (p.description || "").replace(/\(?(COM\d+|\/dev\/\S+)\)?/gi, "").replace(/usb[- ]?(to[- ])?(serial|uart)|device|port/gi, "").trim());
   if (tag.length > 14) tag = tag.slice(0, 13) + "…";
   const dev = p.device.replace(/^\/dev\//, "");
   return tag && tag !== dev ? `${dev} · ${tag}` : dev;
