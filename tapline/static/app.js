@@ -159,6 +159,7 @@ function applyStatus(st) {
   const can = st.source_kind === "can" || st.source_kind === "sim-can";
   $("#composeLabel").textContent = can ? "CAN message (ID#DATA, e.g. 300#01 or 18FF50E5#01A2)" : "Message (hex)";
   $("#composeHex").placeholder = can ? "300#01" : "5A A5 03 30 32 65";
+  $("#autoFix").closest("label").style.visibility = can ? "hidden" : "";
   $("#picoState").textContent = st.pico ? `connected on ${st.pico}` : "not connected";
   const b = $("#startBtn");
   b.classList.toggle("running", !!st.running);
@@ -1035,7 +1036,7 @@ function showReplies(replies) {
   const box = $("#replyBox");
   if (!replies) { box.classList.add("hidden"); return; }
   box.classList.remove("hidden");
-  box.innerHTML = `<div class="card replies"><div class="card-title">${replies.length ? `Reply${replies.length > 1 ? "s" : ""} received` : "No reply"}</div>
+  box.innerHTML = `<div class="card replies"><div class="card-title">${replies.length ? (replies.length > 1 ? `${replies.length} messages arrived — the reply is usually first` : "Reply received") : "No reply"}</div>
     ${replies.length ? replies.slice(0, 20).map(f => `<div class="result"><span><span class="chan ${chanClass(f.channel)}">${esc(chanLabel(f.channel))}</span>
       <span class="mono small">${esc(f.hex)}</span></span><span class="score">${f.modbus ? esc(f.modbus.summary) : ""}</span></div>`).join("")
       : `<p class="muted small">Nothing arrived in time. Check wiring (TX → RX, GND), the device address, and the baud rate.</p>`}</div>`;
